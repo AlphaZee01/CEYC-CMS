@@ -1,31 +1,75 @@
 # Christ Embassy — Local Church Management System
 
-A demo-ready React + Tailwind CSS church management application. All state lives in memory (no backend). Built as a single-file app in `src/App.tsx`.
+Production-ready church management platform with a **React frontend**, **Express API**, and **SQLite database**. Data persists across restarts; each user signs in with email and password.
 
 ## Features
 
-- **16 modules**: Dashboard, Members, Cells & Fellowships, Departments, Attendance, Events, Reports, Communications, Finances, Prayer Requests, Discipleship, Announcements, Tasks, Media Library, Report Submissions, Settings
-- **Role-based access**: Senior Pastor, Associate Pastor, Admin, Fellowship Leader, Cell Leader, Sub-cell Leader, Cell Member, Church Member
-- **Demo role switcher**: Settings → simulate any user role
-- **Charts**: Recharts for analytics on the Reports page
-- **Icons**: Lucide React
+- **16 modules** with full CRUD where applicable
+- **JWT authentication** (real login, not a demo role switcher)
+- **Role-based access control** on API and UI
+- **SQLite** database (`data/church.db`)
+- **File uploads** for media library (`uploads/`)
+- **Notifications** for tasks, messages, and assignments
 
 ## Quick start
 
 ```bash
 npm install
-npm run dev
+npm run db:reset    # create / reset database with seed data
+npm run dev         # API on :3001 + Vite on :8080
 ```
 
-Open the URL shown in the terminal (typically `http://localhost:5173`).
+Open **http://localhost:8080** and sign in.
 
-## Default login (demo)
+### Default accounts (password: `ChangeMe123!`)
 
-The app loads as **Rev. David Okonkwo** (Senior Pastor). Use **Settings → Demo Role Switcher** to preview other roles and their page access.
+| Email | Role |
+|-------|------|
+| pastor@celcm.org | Senior Pastor |
+| grace@celcm.org | Associate Pastor |
+| admin@celcm.org | Admin |
+| samuel@celcm.org | Fellowship Leader |
+| chioma@celcm.org | Cell Leader |
+| member1@celcm.org | Church Member |
 
-## Tech stack
+Change `SEED_PASSWORD` in `.env` before running `npm run db:reset` in production.
 
-- React 18 + Vite
-- Tailwind CSS
-- Recharts
-- lucide-react
+## Production deployment
+
+```bash
+cp .env.example .env
+# Edit JWT_SECRET and SEED_PASSWORD
+npm install
+npm run db:reset
+npm run build
+npm start
+```
+
+`npm start` serves the API and the built React app from `dist/` on port **3001** (or `PORT` from `.env`).
+
+## Project structure
+
+```
+server/           Express API + SQLite
+  db.js           Schema
+  seed.js         Seed data
+  auth.js         JWT middleware
+  rbac.js         Permissions
+  index.js        Routes
+src/
+  pages/church/   All 16 page modules
+  components/     Layout + UI
+  context/        Auth state
+  lib/api.ts      API client
+data/             SQLite database (gitignored)
+uploads/          Media files (gitignored)
+```
+
+## Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Dev: frontend + API with hot reload |
+| `npm run build` | Build React for production |
+| `npm start` | Run production server |
+| `npm run db:reset` | Reset and re-seed database |
