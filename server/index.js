@@ -6,14 +6,16 @@ import multer from "multer";
 import { fileURLToPath } from "url";
 import { getDb, initSchema, memberToJson, logActivity, notifyMember } from "./db.js";
 import { authMiddleware, loginUser, requirePage } from "./auth.js";
+import { resolveUserPages, isDepartmentHead } from "./rbac.js";
+import { registerCompletionRoutes } from "./routes-complete.js";
+import { startJobs } from "./jobs.js";
+import { logAudit } from "./audit.js";
 import {
   canAccessFinances,
-  canAccessPage,
   canManageSettings,
   canMessageTarget,
   canUploadMedia,
   scopeMemberFilter,
-  PAGE_ACCESS,
 } from "./rbac.js";
 import { seedDatabase } from "./seed.js";
 
@@ -28,7 +30,16 @@ await seedDatabase(false);
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
+
+const authLimiter = (await import("express-rate-limit")).default({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use("/api/auth/login", authLimiter);
+app.use("/api/auth/forgot-password", authLimiter);
 app.use("/uploads", express.static(UPLOAD_DIR));
 
 const storage = multer.diskStorage({
@@ -71,7 +82,7 @@ app.get("/api/auth/me", authMiddleware, (req, res) => {
       accessLevel: req.user.accessLevel,
       member: req.user.member,
     },
-    pages: PAGE_ACCESS[req.user.member.role] || [],
+    pages: resolveUserPages(req.user.member.role, req.user.accessLevel),
   });
 });
 
@@ -130,7 +141,7 @@ app.get("/api/bootstrap", authMiddleware, (req, res) => {
           logoUrl: settings.logo_url,
         }
       : {},
-    pages: PAGE_ACCESS[req.user.member.role] || [],
+    pages: resolveUserPages(req.user.member.role, req.user.accessLevel),
   });
 });
 
@@ -966,6 +977,17 @@ app.post("/api/reports/submissions", authMiddleware, requirePage("report-submiss
     challenges,
     dueDate,
   } = req.body;
+  const role = req.user.member.role;
+  if (type === "department") {
+    if (!departmentId || !isDepartmentHead(db, req.user.member.id)) {
+      return res.status(403).json({ error: "Only department heads can submit department reports" });
+    }
+  } else if (type === "fellowship" && role !== "Fellowship Leader") {
+    return res.status(403).json({ error: "Fellowship report requires Fellowship Leader role" });
+  } else if (type === "cell" && !["Cell Leader", "Sub-cell Leader"].includes(role)) {
+    return res.status(403).json({ error: "Cell report requires Cell Leader or Sub-cell Leader" });
+  }
+  const defaultDue = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
   const id = uid();
   db.prepare(
     `INSERT INTO cell_reports (id, type, submitter_id, cell_id, fellowship_id, department_id, period, attendance_count, new_visitors, prayer_points, challenges, status, submitted_at, due_date)
@@ -982,10 +1004,11 @@ app.post("/api/reports/submissions", authMiddleware, requirePage("report-submiss
     newVisitors,
     prayerPoints,
     challenges,
-    dueDate || null
+    dueDate || defaultDue
   );
   logActivity(db, `${type} report submitted`, req.user.member.id);
-  res.status(201).json({ id, status: "submitted" });
+  logAudit(req.user.member.id, "report_submit", "cell_report", id, { type, period });
+  res.status(201).json({ id, status: "submitted", dueDate: dueDate || defaultDue });
 });
 
 app.patch("/api/reports/submissions/:id", authMiddleware, requirePage("report-submissions"), (req, res) => {
@@ -1109,6 +1132,9 @@ app.get("/api/dashboard/stats", authMiddleware, requirePage("dashboard"), (req, 
     departments: db.prepare("SELECT COUNT(*) as c FROM departments").get().c,
   });
 });
+
+registerCompletionRoutes(app, { upload, uid, getMemberDepartments, loadMember, UPLOAD_DIR });
+startJobs();
 
 // ─── Production static ─────────────────────────────────────────────────────────
 

@@ -1,7 +1,7 @@
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { getDb, memberToJson } from "./db.js";
-import { canAccessPage } from "./rbac.js";
+import { canAccessPage, resolveUserPages } from "./rbac.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "celcm-production-secret-change-in-env";
 const JWT_EXPIRES = "7d";
@@ -59,11 +59,51 @@ export function authMiddleware(req, res, next) {
 
 export function requirePage(page) {
   return (req, res, next) => {
-    if (!canAccessPage(req.user.member.role, page)) {
+    if (!canAccessPage(req.user.member.role, page, req.user.accessLevel)) {
       return res.status(403).json({ error: "Access denied" });
     }
     next();
   };
+}
+
+export async function changePassword(userId, currentPassword, newPassword) {
+  const db = getDb();
+  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+  if (!user) return { error: "User not found" };
+  const ok = await bcrypt.compare(currentPassword, user.password_hash);
+  if (!ok) return { error: "Current password is incorrect" };
+  const hash = await bcrypt.hash(newPassword, 10);
+  db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hash, userId);
+  return { ok: true };
+}
+
+export async function createPasswordReset(email) {
+  const db = getDb();
+  const user = db
+    .prepare("SELECT u.id, u.email FROM users u JOIN members m ON m.id = u.member_id WHERE u.email = ? AND m.active = 1")
+    .get(email.toLowerCase());
+  if (!user) return { ok: true, message: "If that email exists, a reset link was generated.", devOnly: false };
+  const token = crypto.randomUUID();
+  const expires = new Date(Date.now() + 3600000).toISOString();
+  db.prepare("DELETE FROM password_reset_tokens WHERE user_id = ? AND used = 0").run(user.id);
+  db.prepare(
+    "INSERT INTO password_reset_tokens (id, user_id, token, expires_at) VALUES (?, ?, ?, ?)"
+  ).run(crypto.randomUUID(), user.id, token, expires);
+  return { ok: true, token, email: user.email, expires, devOnly: process.env.NODE_ENV !== "production" };
+}
+
+export async function resetPasswordWithToken(token, newPassword) {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT * FROM password_reset_tokens WHERE token = ? AND used = 0 AND expires_at > datetime('now')`
+    )
+    .get(token);
+  if (!row) return { error: "Invalid or expired reset token" };
+  const hash = await bcrypt.hash(newPassword, 10);
+  db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hash, row.user_id);
+  db.prepare("UPDATE password_reset_tokens SET used = 1 WHERE id = ?").run(row.id);
+  return { ok: true };
 }
 
 export async function loginUser(email, password) {

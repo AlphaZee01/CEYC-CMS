@@ -112,7 +112,7 @@ export async function seedDatabase(reset = false) {
 
   for (const m of coreMembers) {
     insM.run(m.id, m.name, m.email, "+234 801 000 0000", m.role, m.cell, m.fel, "2020-01-15");
-    insU.run(uid(), m.email, hash, m.id, m.role === "Admin" ? "admin" : m.role.includes("Pastor") ? "full" : "standard");
+    insU.run(uid(), m.email, hash, m.id, m.role === "Admin" ? "full" : m.role.includes("Pastor") ? "full" : "standard");
   }
 
   insMD.run("m2", "d1");

@@ -18,7 +18,7 @@ export const PAGE_ACCESS = {
     "dashboard", "members", "attendance", "communications", "report-submissions", "announcements", "events", "prayer",
   ],
   "Sub-cell Leader": [
-    "dashboard", "members", "attendance", "communications", "announcements", "events",
+    "dashboard", "members", "attendance", "communications", "announcements", "events", "report-submissions",
   ],
   "Cell Member": [
     "dashboard", "communications", "prayer", "media", "announcements", "events",
@@ -28,8 +28,21 @@ export const PAGE_ACCESS = {
   ],
 };
 
-export function canAccessPage(role, page) {
-  return PAGE_ACCESS[role]?.includes(page) ?? false;
+/** Extended pages for Admin users with full/admin access level */
+const ADMIN_EXTENDED_PAGES = [
+  "departments", "cells", "reports", "events", "prayer", "discipleship", "media", "report-submissions",
+];
+
+export function resolveUserPages(role, accessLevel = "standard") {
+  let pages = [...(PAGE_ACCESS[role] || [])];
+  if (role === "Admin" && (accessLevel === "admin" || accessLevel === "full")) {
+    pages = [...new Set([...pages, ...ADMIN_EXTENDED_PAGES])];
+  }
+  return [...new Set(pages)];
+}
+
+export function canAccessPage(role, page, accessLevel = "standard") {
+  return resolveUserPages(role, accessLevel).includes(page);
 }
 
 export function canAccessFinances(role) {
@@ -42,6 +55,10 @@ export function canManageSettings(role) {
 
 export function canUploadMedia(role) {
   return ["Senior Pastor", "Associate Pastor", "Admin"].includes(role);
+}
+
+export function isDepartmentHead(db, memberId) {
+  return !!db.prepare("SELECT 1 FROM departments WHERE head_id = ?").get(memberId);
 }
 
 export function scopeMemberFilter(user) {

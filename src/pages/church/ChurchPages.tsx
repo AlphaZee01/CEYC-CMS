@@ -37,6 +37,7 @@ import {
 } from "recharts";
 import { api, exportCSV } from "@/lib/api";
 import { Card, Btn, Badge, Input, Select, Textarea, Modal, PageHeader, cn } from "@/components/church/ui";
+import { EventCalendar } from "@/components/church/EventCalendar";
 import { PAGE_META, type Member, type Cell, type Fellowship, type Department, type PageId, type Role } from "@/types/church";
 
 export const CHART_COLORS = ["#5B21B6", "#0D9488", "#F97316", "#8B5CF6", "#14B8A6", "#FB7185"];
@@ -47,7 +48,7 @@ export const PAGE_ACCESS: Record<Role, PageId[]> = {
   Admin: ["dashboard", "members", "attendance", "finances", "settings", "announcements", "tasks", "communications"],
   "Fellowship Leader": ["dashboard", "members", "cells", "attendance", "communications", "report-submissions", "announcements", "events"],
   "Cell Leader": ["dashboard", "members", "attendance", "communications", "report-submissions", "announcements", "events", "prayer"],
-  "Sub-cell Leader": ["dashboard", "members", "attendance", "communications", "announcements", "events"],
+  "Sub-cell Leader": ["dashboard", "members", "attendance", "communications", "announcements", "events", "report-submissions"],
   "Cell Member": ["dashboard", "communications", "prayer", "media", "announcements", "events"],
   "Church Member": ["dashboard", "communications", "prayer", "media", "announcements", "events"],
 };
@@ -252,6 +253,9 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
             departmentIds: edit.departmentIds,
           }),
         });
+        if (["Senior Pastor", "Admin"].includes(currentUser.role) && edit.welfareNotes !== undefined) {
+          await api(`/members/${edit.id}/welfare`, { method: "PATCH", body: JSON.stringify({ welfareNotes: edit.welfareNotes }) });
+        }
       }
       setModal(null);
       setEdit({});
@@ -349,6 +353,9 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
           <Select label="Role" value={edit.role || "Church Member"} onChange={(v) => setEdit((e) => ({ ...e, role: v as Role }))} options={ROLES.map((r) => ({ value: r, label: r }))} />
           <Select label="Cell" value={edit.cellId || ""} onChange={(v) => setEdit((e) => ({ ...e, cellId: v || null }))} options={[{ value: "", label: "None" }, ...cells.map((c) => ({ value: c.id, label: c.name }))]} />
           <Select label="Fellowship" value={edit.fellowshipId || ""} onChange={(v) => setEdit((e) => ({ ...e, fellowshipId: v || null }))} options={[{ value: "", label: "None" }, ...fellowships.map((f) => ({ value: f.id, label: f.name }))]} />
+          {["Senior Pastor", "Admin"].includes(currentUser.role) && modal === "edit" && edit.id && (
+            <Textarea label="Welfare / pastoral notes (Admin)" value={edit.welfareNotes || ""} onChange={(v) => setEdit((e) => ({ ...e, welfareNotes: v }))} />
+          )}
           <div className="flex justify-end gap-2 pt-2">
             <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
             <Btn onClick={saveMember} disabled={saving}>{saving ? "Saving..." : "Save"}</Btn>
@@ -593,6 +600,7 @@ export function DepartmentsPage({ members, departments: propDepts, onRefresh }: 
 // ─── Attendance ────────────────────────────────────────────────────────────────
 
 export function AttendancePage({ members, cells, onRefresh }: PageProps) {
+  const [trends, setTrends] = useState<{ date: string; cell_name: string; present_count: number }[]>([]);
   const [records, setRecords] = useState<{ id: string; date: string; type: string; cellId: string | null; presentIds: string[]; absentIds: string[] }[]>([]);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [cellId, setCellId] = useState(cells[0]?.id || "");
@@ -601,6 +609,18 @@ export function AttendancePage({ members, cells, onRefresh }: PageProps) {
   const load = () => api<typeof records>("/attendance").then(setRecords).catch(() => {});
 
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    api<typeof trends>("/attendance/trends").then(setTrends).catch(() => {});
+  }, []);
+
+  const trendChart = trends.reduce<Record<string, Record<string, number | string>>>((acc, row) => {
+    const week = row.date?.slice(0, 7) || "week";
+    if (!acc[week]) acc[week] = { week };
+    const key = (row.cell_name || "cell").split(" ")[0];
+    acc[week][key] = row.present_count;
+    return acc;
+  }, {});
+  const trendData = Object.values(trendChart).slice(-6);
 
   const cellMembers = members.filter((m) => m.cellId === cellId && m.active);
 
@@ -639,6 +659,23 @@ export function AttendancePage({ members, cells, onRefresh }: PageProps) {
         </div>
         <Btn className="mt-4" onClick={save}>Save Attendance</Btn>
       </Card>
+      {trendData.length > 0 && (
+        <Card>
+          <h2 className="mb-4 font-semibold">Attendance Trends</h2>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={trendData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="week" />
+              <YAxis />
+              <Tooltip />
+              <Legend />
+              <Bar dataKey="Grace" fill={CHART_COLORS[0]} />
+              <Bar dataKey="Victory" fill={CHART_COLORS[1]} />
+              <Bar dataKey="Faith" fill={CHART_COLORS[2]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
       <Card>
         <h2 className="mb-4 font-semibold">History</h2>
         {records.map((a) => (
@@ -658,6 +695,7 @@ export function EventsPage({ currentUser, onRefresh }: PageProps) {
   const [events, setEvents] = useState<{ id: string; title: string; date: string; time: string; location: string; description: string; rsvpIds: string[] }[]>([]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({ title: "", date: "", time: "", location: "", description: "" });
+  const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
 
   const load = () => api<typeof events>("/events").then(setEvents).catch(() => {});
 
@@ -682,15 +720,29 @@ export function EventsPage({ currentUser, onRefresh }: PageProps) {
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-1">
           <h2 className="mb-3 font-semibold">Calendar</h2>
-          {[...events].sort((a, b) => a.date.localeCompare(b.date)).map((e) => (
-            <div key={e.id} className="mb-2 rounded-lg bg-[hsl(262,52%,32%)]/5 p-3 text-sm">
-              <p className="font-medium">{e.date}</p>
-              <p>{e.title}</p>
-            </div>
-          ))}
+          <EventCalendar
+            events={events}
+            selectedDate={selectedDate}
+            onSelectDate={(d) => {
+              setSelectedDate(d);
+              if (d) setForm((f) => ({ ...f, date: d.toISOString().slice(0, 10) }));
+            }}
+          />
+          <div className="mt-4 space-y-2">
+            {events
+              .filter((e) => !selectedDate || e.date === selectedDate.toISOString().slice(0, 10))
+              .map((e) => (
+                <div key={e.id} className="rounded-lg bg-[hsl(262,52%,32%)]/5 p-2 text-sm">
+                  <p className="font-medium">{e.title}</p>
+                  <p className="text-xs text-muted-foreground">{e.time}</p>
+                </div>
+              ))}
+          </div>
         </Card>
         <div className="space-y-4 lg:col-span-2">
-          {events.map((e) => (
+          {events
+            .filter((e) => !selectedDate || e.date === selectedDate.toISOString().slice(0, 10))
+            .map((e) => (
             <Card key={e.id}>
               <div className="flex flex-wrap justify-between gap-2">
                 <div>
@@ -813,16 +865,21 @@ interface AdminUser {
   role: Role;
 }
 
-export function SettingsPage({ members, settings: propSettings, currentUser, onRefresh }: PageProps) {
+export function SettingsPage({ members, settings: propSettings, currentUser, onRefresh, userAccount }: PageProps & { userAccount?: { email: string } }) {
   const [settings, setSettings] = useState(propSettings);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [userForm, setUserForm] = useState({ email: "", password: "", memberId: "", accessLevel: "standard" });
   const [saving, setSaving] = useState(false);
+  const [pwForm, setPwForm] = useState({ current: "", next: "", confirm: "" });
+  const [pwMsg, setPwMsg] = useState("");
+  const [audit, setAudit] = useState<{ action: string; member_name: string; created_at: string }[]>([]);
+  const [logoFile, setLogoFile] = useState<File | null>(null);
 
   useEffect(() => {
     api<ChurchSettings>("/settings").then(setSettings).catch(() => setSettings(propSettings));
     if (canManageSettings(currentUser.role)) {
       api<AdminUser[]>("/users").then(setUsers).catch(() => {});
+      api<typeof audit>("/audit").then(setAudit).catch(() => {});
     }
   }, [propSettings, currentUser.role]);
 
@@ -843,11 +900,43 @@ export function SettingsPage({ members, settings: propSettings, currentUser, onR
     api<AdminUser[]>("/users").then(setUsers);
   };
 
+  const changePassword = async () => {
+    if (pwForm.next !== pwForm.confirm) { setPwMsg("Passwords do not match"); return; }
+    try {
+      await api("/auth/change-password", { method: "POST", body: JSON.stringify({ currentPassword: pwForm.current, newPassword: pwForm.next }) });
+      setPwMsg("Password updated.");
+      setPwForm({ current: "", next: "", confirm: "" });
+    } catch (e) {
+      setPwMsg(e instanceof Error ? e.message : "Failed");
+    }
+  };
+
+  const uploadLogo = async () => {
+    if (!logoFile) return;
+    const fd = new FormData();
+    fd.append("logo", logoFile);
+    const res = await api<{ logoUrl: string }>("/settings/logo", { method: "POST", body: fd });
+    setSettings((s) => ({ ...s, logoUrl: res.logoUrl }));
+    onRefresh();
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader title="Settings" subtitle="Church profile and admin accounts" />
       <Card>
+        <h2 className="mb-4 font-semibold">Change Password</h2>
+        <p className="mb-3 text-sm text-muted-foreground">Account: {userAccount?.email}</p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Input label="Current" type="password" value={pwForm.current} onChange={(v) => setPwForm((p) => ({ ...p, current: v }))} />
+          <Input label="New" type="password" value={pwForm.next} onChange={(v) => setPwForm((p) => ({ ...p, next: v }))} />
+          <Input label="Confirm" type="password" value={pwForm.confirm} onChange={(v) => setPwForm((p) => ({ ...p, confirm: v }))} />
+        </div>
+        {pwMsg && <p className="mt-2 text-sm text-[hsl(174,55%,42%)]">{pwMsg}</p>}
+        <Btn className="mt-3" onClick={changePassword}>Update Password</Btn>
+      </Card>
+      <Card>
         <h2 className="mb-4 font-semibold">Church Information</h2>
+        {settings.logoUrl && <img src={settings.logoUrl} alt="Church logo" className="mb-4 h-16 object-contain" />}
         <div className="grid gap-4 sm:grid-cols-2">
           <Input label="Church Name" value={settings.name} onChange={(v) => setSettings((s) => ({ ...s, name: v }))} />
           <Input label="Tagline" value={settings.tagline} onChange={(v) => setSettings((s) => ({ ...s, tagline: v }))} />
@@ -856,18 +945,35 @@ export function SettingsPage({ members, settings: propSettings, currentUser, onR
           <Input label="Email" value={settings.email} onChange={(v) => setSettings((s) => ({ ...s, email: v }))} />
         </div>
         {canManageSettings(currentUser.role) && (
-          <Btn className="mt-4" onClick={saveSettings} disabled={saving}>{saving ? "Saving..." : "Save Settings"}</Btn>
+          <>
+            <div className="mt-4 flex flex-wrap items-end gap-3">
+              <div>
+                <label className="mb-1 block text-sm font-medium">Logo file</label>
+                <input type="file" accept="image/*" onChange={(e) => setLogoFile(e.target.files?.[0] || null)} className="text-sm" />
+              </div>
+              <Btn variant="accent" onClick={uploadLogo} disabled={!logoFile}>Upload Logo</Btn>
+            </div>
+            <Btn className="mt-4" onClick={saveSettings} disabled={saving}>{saving ? "Saving..." : "Save Settings"}</Btn>
+          </>
         )}
       </Card>
       {canManageSettings(currentUser.role) && (
         <>
+          <Card>
+            <h2 className="mb-4 font-semibold">Audit Log</h2>
+            <ul className="max-h-48 space-y-1 overflow-y-auto text-sm">
+              {audit.map((a, i) => (
+                <li key={i} className="rounded bg-muted/50 px-2 py-1">{a.created_at} — {a.member_name || "System"}: {a.action}</li>
+              ))}
+            </ul>
+          </Card>
           <Card>
             <h2 className="mb-4 font-semibold">Admin Accounts</h2>
             <div className="mb-4 grid gap-3 sm:grid-cols-2">
               <Input label="Email" value={userForm.email} onChange={(v) => setUserForm((f) => ({ ...f, email: v }))} />
               <Input label="Password" type="password" value={userForm.password} onChange={(v) => setUserForm((f) => ({ ...f, password: v }))} />
               <Select label="Member" value={userForm.memberId} onChange={(v) => setUserForm((f) => ({ ...f, memberId: v }))} options={[{ value: "", label: "Select member" }, ...members.map((m) => ({ value: m.id, label: m.name }))]} />
-              <Select label="Access Level" value={userForm.accessLevel} onChange={(v) => setUserForm((f) => ({ ...f, accessLevel: v }))} options={[{ value: "standard", label: "Standard" }, { value: "admin", label: "Admin" }]} />
+              <Select label="Access Level" value={userForm.accessLevel} onChange={(v) => setUserForm((f) => ({ ...f, accessLevel: v }))} options={[{ value: "standard", label: "Standard" }, { value: "full", label: "Full (extended modules)" }]} />
             </div>
             <Btn onClick={createUser}><Plus className="h-4 w-4" /> Create Account</Btn>
             <ul className="mt-4 space-y-2 text-sm">
@@ -1002,11 +1108,16 @@ interface FinanceRecord {
   description: string;
 }
 
-export function FinancesPage({ currentUser }: PageProps) {
+export function FinancesPage({ members, currentUser }: PageProps) {
   const [records, setRecords] = useState<FinanceRecord[]>([]);
-  const [form, setForm] = useState({ type: "income" as "income" | "expense", category: "Tithe", amount: "", description: "" });
+  const [tithes, setTithes] = useState<{ memberId: string | null; memberName: string; total: number; records: FinanceRecord[] }[]>([]);
+  const [tab, setTab] = useState<"ledger" | "transactions">("ledger");
+  const [form, setForm] = useState({ type: "income" as "income" | "expense", category: "Tithe", amount: "", description: "", memberId: "" });
 
-  const load = () => api<FinanceRecord[]>("/finances").then(setRecords).catch(() => {});
+  const load = () => {
+    api<FinanceRecord[]>("/finances").then(setRecords).catch(() => {});
+    api<{ ledger: typeof tithes }>("/finances/tithes").then((d) => setTithes(d.ledger)).catch(() => {});
+  };
 
   useEffect(() => { load(); }, []);
 
@@ -1027,6 +1138,7 @@ export function FinancesPage({ currentUser }: PageProps) {
         category: form.category,
         amount: Number(form.amount),
         description: form.description,
+        memberId: form.memberId || null,
       }),
     });
     setForm({ type: "income", category: "Tithe", amount: "", description: "" });
@@ -1044,6 +1156,10 @@ export function FinancesPage({ currentUser }: PageProps) {
           </Btn>
         }
       />
+      <div className="flex gap-2">
+        <button type="button" onClick={() => setTab("ledger")} className={cn("rounded-lg px-3 py-1 text-sm", tab === "ledger" ? "bg-[hsl(262,52%,32%)] text-white" : "bg-muted")}>Tithe Ledger</button>
+        <button type="button" onClick={() => setTab("transactions")} className={cn("rounded-lg px-3 py-1 text-sm", tab === "transactions" ? "bg-[hsl(262,52%,32%)] text-white" : "bg-muted")}>All Transactions</button>
+      </div>
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard label="Total Income" value={`₦${income.toLocaleString()}`} icon={Wallet} />
         <StatCard label="Total Expenses" value={`₦${expenses.toLocaleString()}`} icon={Wallet} accent="bg-[hsl(12,85%,62%)]" />
@@ -1054,12 +1170,31 @@ export function FinancesPage({ currentUser }: PageProps) {
         <div className="grid gap-3 sm:grid-cols-2">
           <Select label="Type" value={form.type} onChange={(v) => setForm((f) => ({ ...f, type: v as "income" | "expense" }))} options={[{ value: "income", label: "Income" }, { value: "expense", label: "Expense" }]} />
           <Select label="Category" value={form.category} onChange={(v) => setForm((f) => ({ ...f, category: v }))} options={["Tithe", "Offering", "Seed", "Project Fund", "Bills", "Outreach", "Events"].map((c) => ({ value: c, label: c }))} />
+          <Select label="Member (for tithe/offering)" value={form.memberId} onChange={(v) => setForm((f) => ({ ...f, memberId: v }))} options={[{ value: "", label: "General / Anonymous" }, ...members.map((m) => ({ value: m.id, label: m.name }))]} />
           <Input label="Amount (₦)" value={form.amount} onChange={(v) => setForm((f) => ({ ...f, amount: v }))} />
           <Input label="Description" value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
         </div>
         <Btn className="mt-4" onClick={save}>Save</Btn>
       </Card>
-      <Card className="overflow-x-auto p-0">
+      {tab === "ledger" && (
+        <Card>
+          <h2 className="mb-4 font-semibold">Member Tithe & Offering Ledger</h2>
+          {tithes.map((t) => (
+            <div key={t.memberId || "anon"} className="mb-4 border-b pb-4 last:border-0">
+              <div className="flex justify-between font-medium">
+                <span>{t.memberName}</span>
+                <span>₦{t.total.toLocaleString()}</span>
+              </div>
+              <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
+                {t.records.map((r) => (
+                  <li key={r.id}>{r.date} — {r.category}: ₦{r.amount.toLocaleString()}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </Card>
+      )}
+      {tab === "transactions" && <Card className="overflow-x-auto p-0">
         <table className="w-full text-sm">
           <thead className="bg-muted/50"><tr><th className="px-4 py-2 text-left">Date</th><th className="px-4 py-2">Type</th><th className="px-4 py-2">Category</th><th className="px-4 py-2 text-right">Amount</th></tr></thead>
           <tbody>
@@ -1073,7 +1208,7 @@ export function FinancesPage({ currentUser }: PageProps) {
             ))}
           </tbody>
         </table>
-      </Card>
+      </Card>}
     </div>
   );
 }
@@ -1456,8 +1591,9 @@ export function MediaPage({ currentUser }: PageProps) {
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [search, setSearch] = useState("");
   const [uploadOpen, setUploadOpen] = useState(false);
-  const [form, setForm] = useState({ title: "", type: "video", speaker: "", series: "", topic: "", date: "" });
+  const [form, setForm] = useState({ title: "", type: "video", speaker: "", series: "", topic: "", date: "", shareTarget: "all", shareTargetId: "" });
   const [file, setFile] = useState<File | null>(null);
+  const [playing, setPlaying] = useState<MediaItem | null>(null);
 
   const load = useCallback(() => {
     const params = search ? `?search=${encodeURIComponent(search)}` : "";
@@ -1478,6 +1614,8 @@ export function MediaPage({ currentUser }: PageProps) {
     fd.append("series", form.series);
     fd.append("topic", form.topic);
     fd.append("date", form.date || new Date().toISOString().slice(0, 10));
+    fd.append("shareTarget", form.shareTarget);
+    if (form.shareTargetId) fd.append("shareTargetId", form.shareTargetId);
     if (file) fd.append("file", file);
     await api("/media", { method: "POST", body: fd });
     setUploadOpen(false);
@@ -1509,9 +1647,16 @@ export function MediaPage({ currentUser }: PageProps) {
                 <p className="text-sm text-muted-foreground">{m.speaker} · {m.series}</p>
                 <p className="text-xs text-muted-foreground">{m.date} · {m.topic}</p>
                 {m.fileUrl && (
-                  <a href={m.fileUrl} download className="mt-2 inline-flex items-center gap-1 text-sm text-[hsl(174,55%,42%)]">
-                    <Download className="h-4 w-4" /> Download
-                  </a>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(m.type === "video" || m.type === "audio") && (
+                      <Btn variant="accent" className="!px-2 !py-1 text-xs" onClick={() => setPlaying(m)}>
+                        <Play className="h-3 w-3" /> Play
+                      </Btn>
+                    )}
+                    <a href={m.fileUrl} download className="inline-flex items-center gap-1 text-sm text-[hsl(174,55%,42%)]">
+                      <Download className="h-4 w-4" /> Download
+                    </a>
+                  </div>
                 )}
               </div>
             </div>
@@ -1527,9 +1672,21 @@ export function MediaPage({ currentUser }: PageProps) {
           <Input label="Topic" value={form.topic} onChange={(v) => setForm((f) => ({ ...f, topic: v }))} />
           <Input label="Date" type="date" value={form.date} onChange={(v) => setForm((f) => ({ ...f, date: v }))} />
           <label className="block text-sm font-medium">File</label>
+          <Select label="Share with" value={form.shareTarget} onChange={(v) => setForm((f) => ({ ...f, shareTarget: v }))} options={[{ value: "all", label: "All members" }, { value: "cell", label: "Cell" }, { value: "fellowship", label: "Fellowship" }, { value: "department", label: "Department" }]} />
           <input type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} className="text-sm" />
           <Btn onClick={upload}>Upload</Btn>
         </div>
+      </Modal>
+      <Modal open={!!playing} onClose={() => setPlaying(null)} title={playing?.title || "Media"}>
+        {playing?.fileUrl && playing.type === "video" && (
+          <video src={playing.fileUrl} controls className="w-full rounded-lg" />
+        )}
+        {playing?.fileUrl && playing.type === "audio" && (
+          <audio src={playing.fileUrl} controls className="w-full" />
+        )}
+        {playing?.fileUrl && (playing.type === "notes" || playing.type === "slides") && (
+          <p className="text-sm text-muted-foreground">Open or download this file to view.</p>
+        )}
       </Modal>
     </div>
   );
@@ -1554,27 +1711,37 @@ interface CellReport {
   submittedAt: string;
 }
 
-export function ReportSubmissionsPage({ members, cells, currentUser, onRefresh }: PageProps) {
+export function ReportSubmissionsPage({ members, cells, departments, currentUser, onRefresh }: PageProps) {
   const [reports, setReports] = useState<CellReport[]>([]);
-  const [form, setForm] = useState({ attendanceCount: "", newVisitors: "", prayerPoints: "", challenges: "" });
+  const [form, setForm] = useState({ attendanceCount: "", newVisitors: "", prayerPoints: "", challenges: "", dueDate: "" });
   const [approveComment, setApproveComment] = useState<Record<string, string>>({});
+  const isDeptHead = departments.some((d) => d.headId === currentUser.id);
 
   const load = () => api<CellReport[]>("/reports/submissions").then(setReports).catch(() => {});
 
   useEffect(() => { load(); }, []);
 
+  const reportType =
+    isDeptHead && !["Cell Leader", "Sub-cell Leader", "Fellowship Leader"].includes(currentUser.role)
+      ? "department"
+      : currentUser.role === "Fellowship Leader"
+        ? "fellowship"
+        : "cell";
+
   const submit = async () => {
     await api("/reports/submissions", {
       method: "POST",
       body: JSON.stringify({
-        type: currentUser.role === "Fellowship Leader" ? "fellowship" : "cell",
-        cellId: currentUser.cellId,
-        fellowshipId: currentUser.fellowshipId,
+        type: reportType,
+        cellId: reportType === "cell" ? currentUser.cellId : null,
+        fellowshipId: reportType === "fellowship" ? currentUser.fellowshipId : null,
+        departmentId: reportType === "department" ? departments.find((d) => d.headId === currentUser.id)?.id : null,
         period: `Week of ${new Date().toISOString().slice(0, 10)}`,
         attendanceCount: Number(form.attendanceCount) || 0,
         newVisitors: Number(form.newVisitors) || 0,
         prayerPoints: form.prayerPoints,
         challenges: form.challenges,
+        dueDate: form.dueDate || undefined,
       }),
     });
     setForm({ attendanceCount: "", newVisitors: "", prayerPoints: "", challenges: "" });
@@ -1590,17 +1757,22 @@ export function ReportSubmissionsPage({ members, cells, currentUser, onRefresh }
     load();
   };
 
-  const canSubmit = currentUser.role === "Cell Leader" || currentUser.role === "Fellowship Leader";
+  const canSubmit =
+    currentUser.role === "Cell Leader" ||
+    currentUser.role === "Sub-cell Leader" ||
+    currentUser.role === "Fellowship Leader" ||
+    isDeptHead;
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Report Submissions" subtitle="Cell and fellowship weekly reports" />
+      <PageHeader title="Report Submissions" subtitle="Cell, fellowship, and department reports" />
       {canSubmit && (
         <Card>
-          <h2 className="mb-4 font-semibold">Submit Report</h2>
+          <h2 className="mb-4 font-semibold">Submit {reportType} report</h2>
           <div className="grid gap-3 sm:grid-cols-2">
             <Input label="Attendance Count" value={form.attendanceCount} onChange={(v) => setForm((r) => ({ ...r, attendanceCount: v }))} />
             <Input label="New Visitors" value={form.newVisitors} onChange={(v) => setForm((r) => ({ ...r, newVisitors: v }))} />
+            <Input label="Due date" type="date" value={form.dueDate} onChange={(v) => setForm((r) => ({ ...r, dueDate: v }))} />
             <Textarea label="Prayer Points" value={form.prayerPoints} onChange={(v) => setForm((r) => ({ ...r, prayerPoints: v }))} />
             <Textarea label="Challenges" value={form.challenges} onChange={(v) => setForm((r) => ({ ...r, challenges: v }))} />
           </div>

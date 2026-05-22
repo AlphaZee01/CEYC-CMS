@@ -37,6 +37,7 @@ export interface Member {
   departmentIds: string[];
   active: boolean;
   joinedAt: string;
+  welfareNotes?: string;
 }
 
 export interface Fellowship {

@@ -264,7 +264,34 @@ export function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_members_fellowship ON members(fellowship_id);
     CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance_records(date);
     CREATE INDEX IF NOT EXISTS idx_finances_date ON finances(date);
+
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token TEXT UNIQUE NOT NULL,
+      expires_at TEXT NOT NULL,
+      used INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id TEXT PRIMARY KEY,
+      member_id TEXT REFERENCES members(id),
+      action TEXT NOT NULL,
+      entity_type TEXT,
+      entity_id TEXT,
+      details TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
   `);
+  migrateColumns(db);
+}
+
+function migrateColumns(db) {
+  const cols = db.prepare("PRAGMA table_info(members)").all().map((c) => c.name);
+  if (!cols.includes("welfare_notes")) {
+    db.exec("ALTER TABLE members ADD COLUMN welfare_notes TEXT");
+  }
 }
 
 export function memberToJson(row, departmentIds = []) {
@@ -280,6 +307,7 @@ export function memberToJson(row, departmentIds = []) {
     departmentIds,
     active: !!row.active,
     joinedAt: row.joined_at,
+    welfareNotes: row.welfare_notes || "",
   };
 }
 
