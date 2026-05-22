@@ -1,11 +1,10 @@
 import bcrypt from "bcryptjs";
 import path from "path";
-import { getDb, memberToJson, logActivity, notifyMember } from "./db.js";
+import { getDb } from "./store.js";
 import { authMiddleware, changePassword, createPasswordReset, resetPasswordWithToken } from "./auth.js";
 import {
   canAccessFinances,
   canManageSettings,
-  isDepartmentHead,
   resolveUserPages,
 } from "./rbac.js";
 import { logAudit } from "./audit.js";
@@ -21,7 +20,7 @@ export function registerCompletionRoutes(app, { upload, uid, getMemberDepartment
     }
     const result = await changePassword(req.user.userId, currentPassword, newPassword);
     if (result.error) return res.status(400).json(result);
-    logAudit(req.user.member.id, "password_changed");
+    await logAudit(req.user.member.id, "password_changed");
     res.json({ ok: true });
   });
 
@@ -30,10 +29,10 @@ export function registerCompletionRoutes(app, { upload, uid, getMemberDepartment
     if (!email) return res.status(400).json({ error: "Email required" });
     const result = await createPasswordReset(email);
     const payload = { message: result.message || "If that email exists, reset instructions were sent." };
-    if (result.devOnly && result.token) {
-      payload.resetToken = result.token;
-      payload.resetUrl = `/reset-password?token=${result.token}`;
-      payload.note = "Dev mode: use token above (configure SMTP for production email)";
+    if (result.resetToken) {
+      payload.resetToken = result.resetToken;
+      payload.resetUrl = result.resetUrl || `/reset-password?token=${result.resetToken}`;
+      if (result.note) payload.note = result.note;
     }
     res.json(payload);
   });
@@ -48,8 +47,8 @@ export function registerCompletionRoutes(app, { upload, uid, getMemberDepartment
     res.json({ ok: true });
   });
 
-  app.get("/api/finances/tithes", authMiddleware, (req, res) => {
-    if (!canAccessFinances(req.user.member.role, req.user.accessLevel)) {
+  app.get("/api/finances/tithes", authMiddleware, async (req, res) => {
+    if (!canAccessFinances(req.user.member.role)) {
       return res.status(403).json({ error: "Access denied" });
     }
     const db = getDb();
@@ -63,7 +62,7 @@ export function registerCompletionRoutes(app, { upload, uid, getMemberDepartment
       params.push(memberId);
     }
     sql += ` ORDER BY f.date DESC`;
-    const rows = db.prepare(sql).all(...params);
+    const rows = await db.prepare(sql).all(...params);
     const byMember = {};
     for (const r of rows) {
       const key = r.member_id || "anonymous";
@@ -87,22 +86,22 @@ export function registerCompletionRoutes(app, { upload, uid, getMemberDepartment
     res.json({ ledger: Object.values(byMember), records: rows });
   });
 
-  app.post("/api/settings/logo", authMiddleware, logoUpload, (req, res) => {
+  app.post("/api/settings/logo", authMiddleware, logoUpload, async (req, res) => {
     if (!canManageSettings(req.user.member.role)) {
       return res.status(403).json({ error: "Access denied" });
     }
     if (!req.file) return res.status(400).json({ error: "Logo file required" });
     const url = `/uploads/${path.basename(req.file.path)}`;
-    getDb().prepare("UPDATE church_settings SET logo_url = ? WHERE id = 1").run(url);
-    logAudit(req.user.member.id, "logo_uploaded", "settings", "1");
+    await getDb().prepare("UPDATE church_settings SET logo_url = ? WHERE id = 1").run(url);
+    await logAudit(req.user.member.id, "logo_uploaded", "settings", "1");
     res.json({ logoUrl: url });
   });
 
-  app.get("/api/audit", authMiddleware, (req, res) => {
+  app.get("/api/audit", authMiddleware, async (req, res) => {
     if (!canManageSettings(req.user.member.role)) {
       return res.status(403).json({ error: "Access denied" });
     }
-    const rows = getDb()
+    const rows = await getDb()
       .prepare(
         `SELECT a.*, m.name as member_name FROM audit_log a
          LEFT JOIN members m ON m.id = a.member_id ORDER BY a.created_at DESC LIMIT 100`
@@ -111,24 +110,24 @@ export function registerCompletionRoutes(app, { upload, uid, getMemberDepartment
     res.json(rows);
   });
 
-  app.delete("/api/events/:id", authMiddleware, (req, res) => {
-    getDb().prepare("DELETE FROM events WHERE id = ?").run(req.params.id);
-    logAudit(req.user.member.id, "delete", "event", req.params.id);
+  app.delete("/api/events/:id", authMiddleware, async (req, res) => {
+    await getDb().prepare("DELETE FROM events WHERE id = ?").run(req.params.id);
+    await logAudit(req.user.member.id, "delete", "event", req.params.id);
     res.json({ ok: true });
   });
 
-  app.delete("/api/announcements/:id", authMiddleware, (req, res) => {
-    getDb().prepare("DELETE FROM announcements WHERE id = ?").run(req.params.id);
+  app.delete("/api/announcements/:id", authMiddleware, async (req, res) => {
+    await getDb().prepare("DELETE FROM announcements WHERE id = ?").run(req.params.id);
     res.json({ ok: true });
   });
 
-  app.delete("/api/tasks/:id", authMiddleware, (req, res) => {
-    getDb().prepare("DELETE FROM tasks WHERE id = ?").run(req.params.id);
+  app.delete("/api/tasks/:id", authMiddleware, async (req, res) => {
+    await getDb().prepare("DELETE FROM tasks WHERE id = ?").run(req.params.id);
     res.json({ ok: true });
   });
 
-  app.delete("/api/media/:id", authMiddleware, (req, res) => {
-    getDb().prepare("DELETE FROM media_items WHERE id = ?").run(req.params.id);
+  app.delete("/api/media/:id", authMiddleware, async (req, res) => {
+    await getDb().prepare("DELETE FROM media_items WHERE id = ?").run(req.params.id);
     res.json({ ok: true });
   });
 
@@ -139,20 +138,21 @@ export function registerCompletionRoutes(app, { upload, uid, getMemberDepartment
     const { password } = req.body;
     if (!password || password.length < 8) return res.status(400).json({ error: "Password 8+ chars required" });
     const hash = await bcrypt.hash(password, 10);
-    getDb().prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hash, req.params.id);
+    await getDb().prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hash, req.params.id);
     res.json({ ok: true });
   });
 
-  app.patch("/api/members/:id/welfare", authMiddleware, (req, res) => {
+  app.patch("/api/members/:id/welfare", authMiddleware, async (req, res) => {
     if (!["Senior Pastor", "Admin"].includes(req.user.member.role)) {
       return res.status(403).json({ error: "Welfare notes: Admin/Pastor only" });
     }
     const { welfareNotes } = req.body;
-    getDb().prepare("UPDATE members SET welfare_notes = ?, updated_at = datetime('now') WHERE id = ?").run(
+    const db = getDb();
+    await db.prepare("UPDATE members SET welfare_notes = ?, updated_at = datetime('now') WHERE id = ?").run(
       welfareNotes || null,
       req.params.id
     );
-    res.json(loadMember(getDb(), req.params.id));
+    res.json(await loadMember(db, req.params.id));
   });
 }
 

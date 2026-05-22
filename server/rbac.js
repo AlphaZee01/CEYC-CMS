@@ -57,8 +57,8 @@ export function canUploadMedia(role) {
   return ["Senior Pastor", "Associate Pastor", "Admin"].includes(role);
 }
 
-export function isDepartmentHead(db, memberId) {
-  return !!db.prepare("SELECT 1 FROM departments WHERE head_id = ?").get(memberId);
+export async function isDepartmentHead(db, memberId) {
+  return !!(await db.prepare("SELECT 1 FROM departments WHERE head_id = ?").get(memberId));
 }
 
 export function scopeMemberFilter(user) {

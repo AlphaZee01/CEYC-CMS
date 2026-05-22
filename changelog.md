@@ -1,5 +1,23 @@
 # Changelog
 
+## [2025-05-22] — Optional: SMTP email + PostgreSQL / Supabase
+
+### Added
+- **SMTP** (`server/email.js`): password reset emails via nodemailer; optional `SMTP_NOTIFY` for notification emails
+- **PostgreSQL** support (`server/store.js`, `server/schema.postgres.sql`): set `DATABASE_URL` to use Supabase or any Postgres instance instead of SQLite
+- **Migration scripts**: `npm run db:migrate:pg`, `npm run db:reset:pg`
+- **Settings API**: `emailConfigured` and `database` fields on `GET /api/settings`
+- **`.env.example`**: documented `DATABASE_URL`, `DATABASE_SSL`, and SMTP variables
+
+### Changed
+- Server routes use async/await consistently for unified SQLite + Postgres `getDb()` layer
+- `dotenv` loaded at server startup; forgot-password returns `resetToken` only when SMTP is not configured
+- Login page shows dev reset token when email is not sent
+
+### Fixed
+- Seed duplicate department inserts on `db:reset`
+- Syntax errors from `await` inside non-async route handlers
+
 ## [2025-05-22] — Feature completion (production polish)
 
 ### Added

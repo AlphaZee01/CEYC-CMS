@@ -20,6 +20,13 @@ export function getDb() {
   return db;
 }
 
+export function resetDbConnection() {
+  if (db) {
+    db.close();
+    db = null;
+  }
+}
+
 export function initSchema() {
   const db = getDb();
   db.exec(`
@@ -311,16 +318,31 @@ export function memberToJson(row, departmentIds = []) {
   };
 }
 
-export function logActivity(db, text, memberId = null) {
-  db.prepare("INSERT INTO activities (id, text, member_id) VALUES (?, ?, ?)").run(
+export async function logActivity(_db, text, memberId = null) {
+  const { dbRun } = await import("./store.js");
+  await dbRun("INSERT INTO activities (id, text, member_id) VALUES (?, ?, ?)", [
     crypto.randomUUID(),
     text,
-    memberId
-  );
+    memberId,
+  ]);
 }
 
-export function notifyMember(db, memberId, title, body, type = "info") {
-  db.prepare(
-    "INSERT INTO notifications (id, member_id, title, body, type) VALUES (?, ?, ?, ?, ?)"
-  ).run(crypto.randomUUID(), memberId, title, body, type);
+export async function notifyMember(db, memberId, title, body, type = "info") {
+  const { dbRun } = await import("./store.js");
+  await dbRun(
+    "INSERT INTO notifications (id, member_id, title, body, type) VALUES (?, ?, ?, ?, ?)",
+    [crypto.randomUUID(), memberId, title, body, type]
+  );
+  try {
+    const row = await (await import("./store.js")).dbGet(
+      "SELECT m.email FROM members m WHERE m.id = ?",
+      [memberId]
+    );
+    if (row?.email) {
+      const { sendNotificationEmail } = await import("./email.js");
+      await sendNotificationEmail(row.email, title, body || "");
+    }
+  } catch {
+    /* email optional */
+  }
 }
