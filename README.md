@@ -1,73 +1,31 @@
-# Welcome to your Lovable project
+# Christ Embassy — Local Church Management System
 
-## Project info
+A demo-ready React + Tailwind CSS church management application. All state lives in memory (no backend). Built as a single-file app in `src/App.tsx`.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## Features
 
-## How can I edit this code?
+- **16 modules**: Dashboard, Members, Cells & Fellowships, Departments, Attendance, Events, Reports, Communications, Finances, Prayer Requests, Discipleship, Announcements, Tasks, Media Library, Report Submissions, Settings
+- **Role-based access**: Senior Pastor, Associate Pastor, Admin, Fellowship Leader, Cell Leader, Sub-cell Leader, Cell Member, Church Member
+- **Demo role switcher**: Settings → simulate any user role
+- **Charts**: Recharts for analytics on the Reports page
+- **Icons**: Lucide React
 
-There are several ways of editing your application.
+## Quick start
 
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+```bash
+npm install
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+Open the URL shown in the terminal (typically `http://localhost:5173`).
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## Default login (demo)
 
-**Use GitHub Codespaces**
+The app loads as **Rev. David Okonkwo** (Senior Pastor). Use **Settings → Demo Role Switcher** to preview other roles and their page access.
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+## Tech stack
 
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
+- React 18 + Vite
 - Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+- Recharts
+- lucide-react
