@@ -166,7 +166,7 @@ Render sets `RENDER_EXTERNAL_URL` automatically — password-reset links use tha
 - Health check: `GET https://your-app.onrender.com/api/health` → `{ "ok": true }`
 - Login: `pastor@celcm.org` / your `SEED_PASSWORD` (default `ChangeMe123!`)
 - Free tier sleeps when idle; first load may take ~30s.
-- Media uploads in `uploads/` do not persist across redeploys — use Supabase Storage for production files.
+- Logo and media uploads are stored in **Supabase Storage** on production when `SUPABASE_SERVICE_ROLE_KEY` is set. Re-upload the logo in **Settings** if an old `/uploads/…` URL returns 404 after deploy.
 
 ## Project structure
 

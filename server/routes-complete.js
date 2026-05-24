@@ -9,6 +9,7 @@ import {
 } from "./rbac.js";
 import { logAudit } from "./audit.js";
 import { updateSupabaseAuthPassword } from "./auth-sync.js";
+import { persistUploadedFile } from "./storage.js";
 
 export function registerCompletionRoutes(app, { upload, uid, getMemberDepartments, loadMember, UPLOAD_DIR }) {
   const logoStorage = upload;
@@ -97,10 +98,20 @@ export function registerCompletionRoutes(app, { upload, uid, getMemberDepartment
       return res.status(403).json({ error: "Access denied" });
     }
     if (!req.file) return res.status(400).json({ error: "Logo file required" });
-    const url = `/uploads/${path.basename(req.file.path)}`;
-    await getDb().prepare("UPDATE church_settings SET logo_url = ? WHERE id = 1").run(url);
-    await logAudit(req.user.member.id, "logo_uploaded", "settings", "1");
-    res.json({ logoUrl: url });
+    try {
+      const url = await persistUploadedFile(
+        req.file.path,
+        "logos",
+        req.file.originalname,
+        req.file.mimetype
+      );
+      await getDb().prepare("UPDATE church_settings SET logo_url = ? WHERE id = 1").run(url);
+      await logAudit(req.user.member.id, "logo_uploaded", "settings", "1");
+      res.json({ logoUrl: url });
+    } catch (err) {
+      console.error("Logo upload failed:", err.message);
+      res.status(500).json({ error: "Logo upload failed" });
+    }
   });
 
   app.get("/api/audit", authMiddleware, async (req, res) => {

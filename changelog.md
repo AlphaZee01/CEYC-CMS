@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026-05-24] — Logo uploads on Render & PWA meta fix
+
+### Fixed
+- **Logo 404 on Render**: uploads go to **Supabase Storage** (`church-assets` bucket) when `SUPABASE_SERVICE_ROLE_KEY` is set; media uploads use the same path
+- **Broken logo images** fall back to church initials in the header/sidebar
+- Deprecated PWA meta warning: added `mobile-web-app-capable`; cleaned stale OG tags in `index.html`
+
+### Added
+- **Logo URL** field in Settings (paste a public `https://` image link)
+
 ## [2026-05-24] — Church branding in header
 
 ### Changed

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { cn } from "@/components/church/ui";
 
 function initialsFromName(name: string) {
@@ -24,16 +25,37 @@ export function ChurchBrand({
   theme?: "sidebar" | "header";
   className?: string;
 }) {
+  const [logoFailed, setLogoFailed] = useState(false);
   const logoSize = size === "lg" ? "h-11 w-11" : size === "sm" ? "h-9 w-9" : "h-10 w-10";
   const titleSize = size === "lg" ? "text-lg" : size === "sm" ? "text-sm" : "text-base";
   const isHeader = theme === "header";
+  const showLogo = logoUrl && !logoFailed;
+
+  useEffect(() => {
+    setLogoFailed(false);
+  }, [logoUrl]);
+
+  const initialsBadge = (
+    <div
+      className={cn(
+        "flex shrink-0 items-center justify-center rounded-lg font-bold",
+        logoSize,
+        isHeader
+          ? "bg-white/20 text-white ring-2 ring-white/25"
+          : "bg-[hsl(var(--sidebar-primary))] text-white"
+      )}
+    >
+      {initialsFromName(name)}
+    </div>
+  );
 
   return (
     <div className={cn("flex min-w-0 items-center gap-3", className)}>
-      {logoUrl ? (
+      {showLogo ? (
         <img
           src={logoUrl}
           alt=""
+          onError={() => setLogoFailed(true)}
           className={cn(
             "shrink-0 rounded-lg object-contain",
             logoSize,
@@ -41,17 +63,7 @@ export function ChurchBrand({
           )}
         />
       ) : (
-        <div
-          className={cn(
-            "flex shrink-0 items-center justify-center rounded-lg font-bold",
-            logoSize,
-            isHeader
-              ? "bg-white/20 text-white ring-2 ring-white/25"
-              : "bg-[hsl(var(--sidebar-primary))] text-white"
-          )}
-        >
-          {initialsFromName(name)}
-        </div>
+        initialsBadge
       )}
       <div className="min-w-0">
         <p

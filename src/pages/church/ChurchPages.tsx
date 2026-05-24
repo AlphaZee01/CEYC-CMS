@@ -1762,10 +1762,25 @@ export function SettingsPage({ members, settings: propSettings, currentUser, onR
       </Card>
       <Card>
         <h2 className="mb-4 font-semibold">Church Information</h2>
-        {settings.logoUrl && <img src={settings.logoUrl} alt="Church logo" className="mb-4 h-16 object-contain" />}
+        {settings.logoUrl && (
+          <img
+            src={settings.logoUrl}
+            alt="Church logo"
+            className="mb-4 h-16 object-contain"
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.display = "none";
+            }}
+          />
+        )}
         <div className="grid gap-4 sm:grid-cols-2">
           <Input label="Church Name" value={settings.name} onChange={(v) => setSettings((s) => ({ ...s, name: v }))} />
           <Input label="Tagline" value={settings.tagline} onChange={(v) => setSettings((s) => ({ ...s, tagline: v }))} />
+          <Input
+            label="Logo URL"
+            value={settings.logoUrl || ""}
+            onChange={(v) => setSettings((s) => ({ ...s, logoUrl: v }))}
+            placeholder="https://… or upload a file below"
+          />
           <Input label="Address" value={settings.address} onChange={(v) => setSettings((s) => ({ ...s, address: v }))} />
           <Input label="Phone" value={settings.phone} onChange={(v) => setSettings((s) => ({ ...s, phone: v }))} />
           <Input label="Email" value={settings.email} onChange={(v) => setSettings((s) => ({ ...s, email: v }))} />
@@ -1774,11 +1789,14 @@ export function SettingsPage({ members, settings: propSettings, currentUser, onR
           <>
             <div className="mt-4 flex flex-wrap items-end gap-3">
               <div>
-                <label className="mb-1 block text-sm font-medium">Logo file</label>
+                <label className="mb-1 block text-sm font-medium">Upload logo file</label>
                 <input type="file" accept="image/*" onChange={(e) => setLogoFile(e.target.files?.[0] || null)} className="text-sm" />
               </div>
               <Btn variant="accent" onClick={uploadLogo} disabled={!logoFile}>Upload Logo</Btn>
             </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              On Render, uploads are stored in Supabase Storage. Paste a public image URL above, or upload again after deploy.
+            </p>
             <Btn className="mt-4" onClick={saveSettings} disabled={saving}>{saving ? "Saving..." : "Save Settings"}</Btn>
           </>
         )}

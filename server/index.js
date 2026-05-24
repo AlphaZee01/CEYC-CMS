@@ -26,6 +26,7 @@ import { ensureBirthdayData } from "./birthday-seed.js";
 import { canViewBirthdays, getBirthdaysForMonth } from "./birthdays.js";
 import { syncAuthUsers, createSupabaseAuthUser, updateSupabaseAuthPassword } from "./auth-sync.js";
 import { useSupabaseAuth } from "./supabase.js";
+import { persistUploadedFile } from "./storage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -1278,7 +1279,20 @@ app.post("/api/media", authMiddleware, requirePage("media"), upload.single("file
   const { title, type, speaker, series, topic, date, shareTarget, shareTargetId } = req.body;
   const id = uid();
   const filePath = req.file?.path || null;
-  const fileUrl = req.file ? `/uploads/${path.basename(req.file.path)}` : null;
+  let fileUrl = null;
+  if (req.file) {
+    try {
+      fileUrl = await persistUploadedFile(
+        req.file.path,
+        "media",
+        req.file.originalname,
+        req.file.mimetype
+      );
+    } catch (err) {
+      console.error("Media upload failed:", err.message);
+      return res.status(500).json({ error: "File upload failed" });
+    }
+  }
   await db.prepare(
     `INSERT INTO media_items (id, title, type, speaker, series, topic, date, file_path, file_url, share_target, share_target_id, uploaded_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
