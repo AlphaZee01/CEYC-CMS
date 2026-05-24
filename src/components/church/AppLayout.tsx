@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
 import {
-  LayoutDashboard,
   Bell,
   LogOut,
   X,
@@ -12,6 +11,7 @@ import { PAGE_ICON_TONES } from "@/lib/icon-colors";
 import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { MobileBottomNav, MOBILE_NAV_PRIORITY } from "@/components/church/MobileBottomNav";
+import { ChurchBrand } from "@/components/church/ChurchBrand";
 
 interface Notification {
   id: string;
@@ -28,7 +28,7 @@ export interface AppLayoutProps {
   pages: PageId[];
   children: ReactNode;
   user: Member;
-  settings: { name: string };
+  settings: { name: string; logoUrl?: string; tagline?: string };
 }
 
 export function AppLayout({ activePage, onNavigate, pages, children, user, settings }: AppLayoutProps) {
@@ -61,7 +61,6 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
 
   const visiblePages = PAGE_META.filter((p) => pages.includes(p.id));
   const unreadCount = notifications.filter((n) => !n.read).length;
-  const activePageMeta = PAGE_META.find((p) => p.id === activePage);
   const mobileNavItems = MOBILE_NAV_PRIORITY.filter((p) => pages.includes(p)).slice(0, 4);
   const moreNavActive = sidebarOpen || !mobileNavItems.includes(activePage);
 
@@ -79,8 +78,6 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
     setSidebarOpen(false);
   };
 
-  const ActiveIcon = PAGE_ICONS[activePage] || LayoutDashboard;
-  const activeTone = PAGE_ICON_TONES[activePage] || "blue";
   const isChatPage = activePage === "communications";
   const userInitials = user.name
     .split(" ")
@@ -90,33 +87,32 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
     .toUpperCase();
 
   return (
-    <div className="flex min-h-[100dvh] bg-background">
+    <div className="flex h-[100dvh] overflow-hidden bg-background">
       {sidebarOpen && (
         <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => setSidebarOpen(false)} aria-hidden />
       )}
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-[min(18rem,85vw)] flex-col bg-[hsl(var(--sidebar-background))] text-[hsl(var(--sidebar-foreground))] transition-transform lg:static lg:w-64 lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-50 flex w-[min(18rem,85vw)] flex-col overflow-hidden bg-[hsl(var(--sidebar-background))] text-[hsl(var(--sidebar-foreground))] transition-transform lg:static lg:h-full lg:w-64 lg:shrink-0 lg:translate-x-0",
           sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
       >
-        <div className="flex items-center justify-between gap-3 border-b border-[hsl(var(--sidebar-border))] p-4 pt-safe sm:p-5">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[hsl(var(--sidebar-primary))] font-bold text-white">
-              CE
-            </div>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold leading-tight">{settings.name.split(" ").slice(0, 2).join(" ")}</p>
-              <p className="text-xs opacity-70">Church Management</p>
-            </div>
-          </div>
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[hsl(var(--sidebar-border))] p-4 pt-safe sm:p-5">
+          <ChurchBrand
+            name={settings.name}
+            logoUrl={settings.logoUrl}
+            tagline={settings.tagline}
+            size="sm"
+            theme="sidebar"
+            className="min-w-0 flex-1"
+          />
           <button type="button" className="touch-target flex items-center justify-center rounded-lg hover:bg-[hsl(var(--sidebar-accent))] lg:hidden" onClick={() => setSidebarOpen(false)} aria-label="Close menu">
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <nav className="flex-1 space-y-0.5 overflow-y-auto p-3">
+        <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain p-3 lg:sidebar-scroll">
           {visiblePages.map(({ id, label }) => {
             const Icon = PAGE_ICONS[id];
             const tone = PAGE_ICON_TONES[id];
@@ -146,25 +142,20 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
           })}
         </nav>
 
-        <div className="border-t border-[hsl(var(--sidebar-border))] p-4 pb-safe text-xs opacity-60 lg:pb-4">Christ Embassy LCM v1.0</div>
+        <div className="shrink-0 border-t border-[hsl(var(--sidebar-border))] p-4 pb-safe text-xs opacity-60 lg:pb-4">Christ Embassy LCM v1.0</div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header
-          className={cn(
-            "sticky top-0 z-30 border-b border-white/10 bg-gradient-to-r from-[hsl(var(--sidebar-accent))] via-primary to-[hsl(var(--sidebar-background))] text-white shadow-lg pt-safe",
-            isChatPage && "hidden lg:block"
-          )}
-        >
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="z-30 shrink-0 border-b border-white/10 bg-gradient-to-r from-[hsl(var(--sidebar-accent))] via-primary to-[hsl(var(--sidebar-background))] text-white shadow-lg pt-safe">
           <div className="flex items-center gap-3 px-4 py-3 sm:px-5">
             <div className="flex min-w-0 flex-1 items-center gap-3">
-              <IconBox icon={ActiveIcon} tone={activeTone} size="lg" variant="solid" className="ring-2 ring-white/25" />
-              <div className="min-w-0">
-                <p className="truncate text-lg font-semibold leading-tight tracking-tight">
-                  {activePageMeta?.label || "Dashboard"}
-                </p>
-                <p className="truncate text-xs text-white/70">{user.name}</p>
-              </div>
+              <ChurchBrand
+                name={settings.name}
+                logoUrl={settings.logoUrl}
+                tagline={settings.tagline}
+                size="lg"
+                theme="header"
+              />
             </div>
 
             <div className="flex items-center gap-1 sm:gap-2">
@@ -239,7 +230,7 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
 
         <main
           className={cn(
-            "flex-1 overflow-auto p-3 pb-[calc(5.75rem+env(safe-area-inset-bottom))] sm:p-4 md:p-6 lg:pb-8 lg:p-8",
+            "min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 pb-[calc(5.75rem+env(safe-area-inset-bottom))] sm:p-4 md:p-6 lg:pb-8 lg:p-8",
             isChatPage && "p-0 pb-[calc(5.75rem+env(safe-area-inset-bottom))] lg:p-8"
           )}
         >

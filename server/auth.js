@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { getDb } from "./store.js";
 import { memberToJson } from "./db.js";
 import { sendPasswordResetEmail, isEmailConfigured } from "./email.js";
+import { getAppUrl } from "./app-url.js";
 import { canAccessPage, resolveUserPages } from "./rbac.js";
 import { useSupabaseAuth, verifySupabaseAccessToken } from "./supabase.js";
 import { updateSupabaseAuthPassword } from "./auth-sync.js";
@@ -173,7 +174,7 @@ export async function createPasswordReset(email) {
   };
   if (!emailResult.sent) {
     payload.resetToken = token;
-    payload.resetUrl = `${process.env.APP_URL || "http://localhost:8080"}/reset-password?token=${token}`;
+    payload.resetUrl = `${getAppUrl()}/reset-password?token=${token}`;
     payload.note = emailResult.reason || "SMTP not configured";
   }
   return payload;

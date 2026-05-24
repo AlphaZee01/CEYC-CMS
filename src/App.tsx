@@ -42,7 +42,11 @@ function ChurchApp() {
 
   if (!user) return null;
 
-  const layoutSettings = { name: (data?.settings?.name as string) || "Christ Embassy" };
+  const layoutSettings = {
+    name: (data?.settings?.name as string) || "Christ Embassy",
+    logoUrl: data?.settings?.logoUrl as string | undefined,
+    tagline: data?.settings?.tagline as string | undefined,
+  };
 
   if (loading || !data) {
     return (
@@ -96,7 +100,7 @@ function ChurchApp() {
       onNavigate={setActivePage}
       pages={pages}
       user={user.member}
-      settings={{ name: (data.settings?.name as string) || "Christ Embassy" }}
+      settings={layoutSettings}
     >
       {renderPage()}
     </AppLayout>

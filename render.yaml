@@ -1,12 +1,13 @@
-# Render Blueprint — Christ Embassy LCM
-# Docs: https://render.com/docs/blueprint-spec
+# Render Blueprint — Christ Embassy LCM (Web Service)
+# https://render.com/docs/blueprint-spec
 services:
   - type: web
     name: christ-embassy-lcm
     runtime: node
     plan: free
     region: oregon
-    buildCommand: npm install && npm run build
+    autoDeployTrigger: commit
+    buildCommand: npm ci && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
@@ -18,8 +19,7 @@ services:
         value: Christ Embassy LCM
       - key: JWT_SECRET
         generateValue: true
-      - key: SEED_PASSWORD
-        sync: false
+      # Required — set in Render dashboard (copy from your local .env)
       - key: DATABASE_URL
         sync: false
       - key: SUPABASE_URL
@@ -32,7 +32,10 @@ services:
         sync: false
       - key: VITE_SUPABASE_ANON_KEY
         sync: false
+      # Optional — Render sets RENDER_EXTERNAL_URL automatically; override if needed
       - key: APP_URL
+        sync: false
+      - key: SEED_PASSWORD
         sync: false
       - key: SMTP_HOST
         sync: false

@@ -1,5 +1,24 @@
 # Changelog
 
+## [2026-05-24] — Church branding in header
+
+### Changed
+- **Top header** always shows church **logo** and **full name** (plus tagline when set in Settings), on every page including Chat
+- Sidebar brand block uses the same logo and name from settings
+
+## [2026-05-24] — Independent desktop sidebar scroll
+
+### Changed
+- **Desktop layout**: sidebar nav and main content scroll independently (fixed viewport height, separate overflow regions)
+- Subtle thin scrollbar on sidebar nav at `lg` breakpoint
+
+## [2026-05-24] — Render Web Service deploy guide
+
+### Changed
+- README **Deploy on Render (Web Service)** — step-by-step manual Web Service setup
+- `render.yaml` — `npm ci`, auto-deploy on commit
+- `RENDER_EXTERNAL_URL` used automatically for password-reset links on Render
+
 ## [2026-05-24] — Mobile bottom nav & Render deployment
 
 ### Added

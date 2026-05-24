@@ -114,56 +114,59 @@ npm start
 
 `npm start` serves the API and the built React app from `dist/` on port **3001** (or `PORT` from `.env`).
 
-## Deploy on Render
+## Deploy on Render (Web Service)
 
-This app runs as a **single Web Service** (Express API + static Vite build). Use Supabase for Postgres and Auth in production.
+One **Web Service** runs the Express API and serves the built React app from `dist/`. Database and auth stay on **Supabase**.
 
-### Option A — Blueprint (recommended)
+### Step-by-step — New Web Service
 
-1. Push this repo to GitHub.
-2. In [Render Dashboard](https://dashboard.render.com/) → **New** → **Blueprint** → connect the repo (uses `render.yaml`).
-3. Set secret env vars when prompted (see table below).
-4. After deploy, copy your service URL (e.g. `https://christ-embassy-lcm.onrender.com`).
+1. Go to [Render Dashboard](https://dashboard.render.com/) → **New +** → **Web Service**.
+2. Connect GitHub repo **AlphaZee01/the-style-edit** (or your fork).
+3. Branch: `cursor/church-production-system-90cb` (or `main` if merged).
+4. Settings:
 
-### Option B — Manual Web Service
-
-| Setting | Value |
-|---------|--------|
-| **Build Command** | `npm install && npm run build` |
+| Field | Value |
+|-------|--------|
+| **Name** | `christ-embassy-lcm` (or your choice) |
+| **Runtime** | Node |
+| **Build Command** | `npm ci && npm run build` |
 | **Start Command** | `npm start` |
 | **Health Check Path** | `/api/health` |
 
-### Required environment variables (Render)
+5. **Environment** — add these (copy from your local `.env`):
 
-| Variable | Notes |
-|----------|--------|
-| `DATABASE_URL` | Supabase **Session pooler** URI (IPv4-friendly) |
+| Key | Value |
+|-----|--------|
+| `NODE_ENV` | `production` |
+| `DATABASE_URL` | Supabase **Session pooler** URI |
 | `DATABASE_SSL` | `true` |
-| `SUPABASE_URL` | Project URL |
-| `SUPABASE_ANON_KEY` | anon key (server) |
-| `SUPABASE_SERVICE_ROLE_KEY` | service role (server only) |
-| `VITE_SUPABASE_URL` | Same as `SUPABASE_URL` — needed at **build** time |
-| `VITE_SUPABASE_ANON_KEY` | Same as anon key — needed at **build** time |
-| `JWT_SECRET` | Random secret (Render can auto-generate) |
-| `SEED_PASSWORD` | Initial user passwords if you re-seed |
-| `APP_URL` | Your Render URL, e.g. `https://your-app.onrender.com` |
+| `SUPABASE_URL` | `https://gilcsmnyeuxwuvpxowik.supabase.co` |
+| `SUPABASE_ANON_KEY` | anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | service role key |
+| `VITE_SUPABASE_URL` | same as `SUPABASE_URL` |
+| `VITE_SUPABASE_ANON_KEY` | same as anon key |
+| `JWT_SECRET` | random string (Generate in Render) |
 
-Optional: `SMTP_*` for password-reset email, `CHURCH_NAME`.
+`VITE_*` vars must be set **before the first build** so Supabase auth is baked into the frontend.
 
-### Supabase after deploy
+6. Click **Create Web Service** and wait for the build (~2–5 min).
+7. Open your URL: `https://christ-embassy-lcm.onrender.com` (name varies).
+8. In **Supabase → Authentication → URL Configuration**, add:
+   - Site URL: your Render URL
+   - Redirect: `https://your-app.onrender.com/reset-password`
 
-In **Authentication → URL Configuration**, add:
+Render sets `RENDER_EXTERNAL_URL` automatically — password-reset links use that if `APP_URL` is unset.
 
-- `https://your-app.onrender.com/reset-password`
-- `https://your-app.onrender.com` as site URL if needed
+### Option B — Blueprint (`render.yaml`)
 
-Run locally once (with production keys): `npm run auth:sync` to link church users to Supabase Auth.
+**New** → **Blueprint** → select repo. Render reads `render.yaml` and creates the Web Service. Fill in secret env vars when prompted.
 
-### Notes
+### After deploy
 
-- Render’s filesystem is **ephemeral** — uploaded media in `uploads/` may not persist across deploys. Use Supabase Storage for production media if needed.
-- Free tier services spin down after inactivity; first request may take ~30s.
-- Health check: `GET /api/health` → `{ "ok": true }`
+- Health check: `GET https://your-app.onrender.com/api/health` → `{ "ok": true }`
+- Login: `pastor@celcm.org` / your `SEED_PASSWORD` (default `ChangeMe123!`)
+- Free tier sleeps when idle; first load may take ~30s.
+- Media uploads in `uploads/` do not persist across redeploys — use Supabase Storage for production files.
 
 ## Project structure
 

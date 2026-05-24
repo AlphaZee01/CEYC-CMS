@@ -82,6 +82,26 @@
     display: none;
   }
 
+  @media (min-width: 1024px) {
+    .sidebar-scroll {
+      scrollbar-width: thin;
+      scrollbar-color: hsl(var(--sidebar-accent)) transparent;
+    }
+
+    .sidebar-scroll::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .sidebar-scroll::-webkit-scrollbar-thumb {
+      border-radius: 9999px;
+      background-color: hsl(var(--sidebar-accent));
+    }
+
+    .sidebar-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+  }
+
   .touch-target {
     min-height: 44px;
     min-width: 44px;

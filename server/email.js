@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { getAppUrl } from "./app-url.js";
 
 const SMTP_HOST = process.env.SMTP_HOST;
 const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
@@ -6,7 +7,7 @@ const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASS = process.env.SMTP_PASS;
 const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER || "noreply@celcm.org";
 const SMTP_SECURE = process.env.SMTP_SECURE === "true";
-const APP_URL = process.env.APP_URL || "http://localhost:8080";
+const APP_URL = getAppUrl();
 
 export function isEmailConfigured() {
   return !!(SMTP_HOST && SMTP_USER && SMTP_PASS);
