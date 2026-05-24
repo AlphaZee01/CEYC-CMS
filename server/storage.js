@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { getAppUrl } from "./app-url.js";
 import { getSupabaseAdminClient } from "./supabase.js";
 import { usePostgres } from "./store.js";
 
@@ -45,4 +46,29 @@ export async function persistUploadedFile(localPath, folder, originalName, mimeT
 
 export function isExternalUrl(url) {
   return typeof url === "string" && /^https?:\/\//i.test(url);
+}
+
+/** Ensure logo/upload URLs work on mobile and production (absolute when relative). */
+export function resolveAssetUrl(url, req) {
+  if (!url || typeof url !== "string") return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (isExternalUrl(trimmed)) return trimmed;
+  if (trimmed.startsWith("/")) {
+    const host = req?.get?.("host");
+    if (host) {
+      const proto = req.get("x-forwarded-proto") || req.protocol || "https";
+      return `${proto}://${host}${trimmed}`;
+    }
+    return `${getAppUrl().replace(/\/$/, "")}${trimmed}`;
+  }
+  return trimmed;
+}
+
+export function brandingFromSettings(settings, req) {
+  return {
+    name: settings?.name || "Christ Embassy",
+    tagline: settings?.tagline || "Local Church Management System",
+    logoUrl: resolveAssetUrl(settings?.logo_url, req),
+  };
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-05-24] — Mobile logo and faster sign-in
+
+### Fixed
+- **Logo on mobile**: absolute logo URLs from the request host; white backing on header/login images so light logos show on the gradient; larger stacked login logo; cached branding shows immediately after sign-in
+- **Slow sign-in**: removed full-page reload after login (SPA navigation); deduped `/auth/me` calls; bootstrap loads member departments in one query instead of N+1
+
 ## [2026-05-24] — Login page church branding
 
 ### Changed

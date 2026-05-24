@@ -26,7 +26,7 @@ import { ensureBirthdayData } from "./birthday-seed.js";
 import { canViewBirthdays, getBirthdaysForMonth } from "./birthdays.js";
 import { syncAuthUsers, createSupabaseAuthUser, updateSupabaseAuthPassword } from "./auth-sync.js";
 import { useSupabaseAuth } from "./supabase.js";
-import { persistUploadedFile } from "./storage.js";
+import { persistUploadedFile, brandingFromSettings, resolveAssetUrl } from "./storage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -98,6 +98,20 @@ async function getMemberDepartments(db, memberId) {
   return rows.map((r) => r.department_id);
 }
 
+async function getMemberDepartmentsMap(db, memberIds) {
+  const map = new Map();
+  if (!memberIds.length) return map;
+  const placeholders = memberIds.map(() => "?").join(", ");
+  const rows = await db
+    .prepare(`SELECT member_id, department_id FROM member_departments WHERE member_id IN (${placeholders})`)
+    .all(...memberIds);
+  for (const r of rows) {
+    if (!map.has(r.member_id)) map.set(r.member_id, []);
+    map.get(r.member_id).push(r.department_id);
+  }
+  return map;
+}
+
 async function loadMember(db, id) {
   const row = await db.prepare("SELECT * FROM members WHERE id = ?").get(id);
   return memberToJson(row, await getMemberDepartments(db, id));
@@ -105,13 +119,9 @@ async function loadMember(db, id) {
 
 // ─── Public (no auth) ────────────────────────────────────────────────────────
 
-app.get("/api/public/branding", async (_req, res) => {
+app.get("/api/public/branding", async (req, res) => {
   const s = await getDb().prepare("SELECT name, tagline, logo_url FROM church_settings WHERE id = 1").get();
-  res.json({
-    name: s?.name || "Christ Embassy",
-    tagline: s?.tagline || "Local Church Management System",
-    logoUrl: s?.logo_url || null,
-  });
+  res.json(brandingFromSettings(s, req));
 });
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
@@ -135,6 +145,7 @@ app.post("/api/auth/login", async (req, res) => {
 });
 
 app.get("/api/auth/me", authMiddleware, async (req, res) => {
+  const settings = await getDb().prepare("SELECT name, tagline, logo_url FROM church_settings WHERE id = 1").get();
   res.json({
     user: {
       id: req.user.userId,
@@ -143,6 +154,7 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
       member: req.user.member,
     },
     pages: resolveUserPages(req.user.member.role, req.user.accessLevel),
+    branding: brandingFromSettings(settings, req),
   });
 });
 
@@ -160,9 +172,11 @@ app.get("/api/bootstrap", authMiddleware, async (req, res) => {
   const memberRows = await db
     .prepare(`SELECT * FROM members WHERE active = 1 AND ${scope.sql} ORDER BY name`)
     .all(...scope.params);
-  const members = await Promise.all(
-    memberRows.map(async (m) => memberToJson(m, await getMemberDepartments(db, m.id)))
+  const deptMap = await getMemberDepartmentsMap(
+    db,
+    memberRows.map((m) => m.id)
   );
+  const members = memberRows.map((m) => memberToJson(m, deptMap.get(m.id) || []));
 
   const fellowships = (await db.prepare("SELECT * FROM fellowships ORDER BY name").all()).map((f) => ({
     id: f.id,
@@ -189,6 +203,7 @@ app.get("/api/bootstrap", authMiddleware, async (req, res) => {
   );
 
   const settings = await db.prepare("SELECT * FROM church_settings WHERE id = 1").get();
+  const branding = brandingFromSettings(settings, req);
 
   res.json({
     members,
@@ -197,12 +212,12 @@ app.get("/api/bootstrap", authMiddleware, async (req, res) => {
     departments,
     settings: settings
       ? {
-          name: settings.name,
-          tagline: settings.tagline,
+          name: branding.name,
+          tagline: branding.tagline,
           address: settings.address,
           phone: settings.phone,
           email: settings.email,
-          logoUrl: settings.logo_url,
+          logoUrl: branding.logoUrl,
         }
       : {},
     pages: resolveUserPages(req.user.member.role, req.user.accessLevel),

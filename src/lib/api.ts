@@ -60,7 +60,12 @@ export const authApi = {
       method: "POST",
       body: JSON.stringify({ email, password }),
     }),
-  me: () => api<{ user: unknown; pages: string[] }>("/auth/me"),
+  me: () =>
+    api<{
+      user: unknown;
+      pages: string[];
+      branding?: { name: string; tagline?: string; logoUrl?: string | null };
+    }>("/auth/me"),
 };
 
 export function exportCSV(filename: string, headers: string[], rows: string[][]) {

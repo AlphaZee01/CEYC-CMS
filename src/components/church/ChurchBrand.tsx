@@ -28,7 +28,14 @@ export function ChurchBrand({
   className?: string;
 }) {
   const [logoFailed, setLogoFailed] = useState(false);
-  const logoSize = size === "lg" ? "h-11 w-11" : size === "sm" ? "h-9 w-9" : "h-10 w-10";
+  const isStacked = layout === "stacked";
+  const logoSize = isStacked
+    ? "h-16 w-16 sm:h-20 sm:w-20"
+    : size === "lg"
+      ? "h-11 w-11"
+      : size === "sm"
+        ? "h-9 w-9"
+        : "h-10 w-10";
   const titleSize = size === "lg" ? "text-lg" : size === "sm" ? "text-sm" : "text-base";
   const isHeader = theme === "header";
   const showLogo = logoUrl && !logoFailed;
@@ -55,11 +62,14 @@ export function ChurchBrand({
     <img
       src={logoUrl}
       alt=""
+      loading="eager"
+      decoding="async"
+      referrerPolicy="no-referrer"
       onError={() => setLogoFailed(true)}
       className={cn(
         "shrink-0 rounded-lg object-contain",
         logoSize,
-        isHeader ? "bg-white/15 ring-2 ring-white/20" : "bg-white/10"
+        isHeader ? "bg-white p-1 shadow-sm ring-2 ring-white/40" : "bg-white p-0.5 shadow-sm"
       )}
     />
   ) : (
@@ -84,6 +94,7 @@ export function ChurchBrand({
       className={cn(
         "truncate text-xs leading-snug",
         layout === "stacked" && "whitespace-normal text-center",
+        isHeader && layout === "row" && "hidden sm:block",
         isHeader ? "text-white/70" : "opacity-70"
       )}
     >

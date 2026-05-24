@@ -153,7 +153,7 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
                 name={settings.name}
                 logoUrl={settings.logoUrl}
                 tagline={settings.tagline}
-                size="lg"
+                size="md"
                 theme="header"
               />
             </div>

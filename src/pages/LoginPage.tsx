@@ -1,20 +1,15 @@
 import { useState, useEffect, type FormEvent } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
-import { api, publicApi } from "@/lib/api";
+import { api } from "@/lib/api";
 import { resetPasswordForEmail, supabaseConfigured } from "@/lib/supabase";
+import { fetchPublicBranding, getCachedBranding } from "@/lib/branding";
 import { Btn, Input, Card } from "@/components/church/ui";
 import { ChurchBrand } from "@/components/church/ChurchBrand";
 
-const DEFAULT_BRANDING = {
-  name: "Christ Embassy",
-  tagline: "Local Church Management System",
-  logoUrl: undefined as string | undefined,
-};
-
 export default function LoginPage() {
   const { login, user } = useAuth();
-  const [branding, setBranding] = useState(DEFAULT_BRANDING);
+  const [branding, setBranding] = useState(getCachedBranding);
   const [email, setEmail] = useState("pastor@celcm.org");
   const [password, setPassword] = useState("ChangeMe123!");
   const [error, setError] = useState("");
@@ -23,15 +18,7 @@ export default function LoginPage() {
   const [resetInfo, setResetInfo] = useState("");
 
   useEffect(() => {
-    publicApi<{ name: string; tagline: string; logoUrl: string | null }>("/public/branding")
-      .then((b) =>
-        setBranding({
-          name: b.name,
-          tagline: b.tagline,
-          logoUrl: b.logoUrl || undefined,
-        })
-      )
-      .catch(() => {});
+    fetchPublicBranding().then(setBranding).catch(() => {});
   }, []);
 
   if (user) return <Navigate to="/app" replace />;
@@ -42,10 +29,8 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await login(email, password);
-      window.location.href = "/app";
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
-    } finally {
       setLoading(false);
     }
   };

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { api, authApi, setToken } from "@/lib/api";
 import {
   supabase,
@@ -7,10 +7,12 @@ import {
   signOutSupabase,
 } from "@/lib/supabase";
 import type { AuthUser, PageId } from "@/types/church";
+import { cacheBranding, getCachedBranding, type ChurchBranding, DEFAULT_BRANDING } from "@/lib/branding";
 
 interface AuthState {
   user: AuthUser | null;
   pages: PageId[];
+  branding: ChurchBranding;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
@@ -22,18 +24,42 @@ const AuthContext = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [pages, setPages] = useState<PageId[]>([]);
+  const [branding, setBranding] = useState<ChurchBranding>(getCachedBranding);
   const [loading, setLoading] = useState(true);
+  const refreshPromiseRef = useRef<Promise<void> | null>(null);
 
   const refresh = useCallback(async () => {
+    if (refreshPromiseRef.current) return refreshPromiseRef.current;
+
+    refreshPromiseRef.current = (async () => {
+      try {
+        const data = await authApi.me();
+        setUser(data.user as AuthUser);
+        setPages(data.pages as PageId[]);
+        if (data.branding) {
+          setBranding({
+            name: data.branding.name,
+            tagline: data.branding.tagline,
+            logoUrl: data.branding.logoUrl || undefined,
+          });
+          cacheBranding({
+            name: data.branding.name,
+            tagline: data.branding.tagline,
+            logoUrl: data.branding.logoUrl || undefined,
+          });
+        }
+      } catch {
+        setUser(null);
+        setPages([]);
+        setToken(null);
+        if (supabaseConfigured) await signOutSupabase();
+      }
+    })();
+
     try {
-      const data = await authApi.me();
-      setUser(data.user as AuthUser);
-      setPages(data.pages as PageId[]);
-    } catch {
-      setUser(null);
-      setPages([]);
-      setToken(null);
-      if (supabaseConfigured) await signOutSupabase();
+      await refreshPromiseRef.current;
+    } finally {
+      refreshPromiseRef.current = null;
     }
   }, []);
 
@@ -83,6 +109,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(u as AuthUser);
     const me = await authApi.me();
     setPages(me.pages as PageId[]);
+    if (me.branding) {
+      setBranding({
+        name: me.branding.name,
+        tagline: me.branding.tagline,
+        logoUrl: me.branding.logoUrl || undefined,
+      });
+      cacheBranding({
+        name: me.branding.name,
+        tagline: me.branding.tagline,
+        logoUrl: me.branding.logoUrl || undefined,
+      });
+    }
   };
 
   const logout = async () => {
@@ -90,10 +128,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(null);
     setUser(null);
     setPages([]);
+    setBranding(DEFAULT_BRANDING);
   };
 
   return (
-    <AuthContext.Provider value={{ user, pages, loading, login, logout, refresh }}>
+    <AuthContext.Provider value={{ user, pages, branding, loading, login, logout, refresh }}>
       {children}
     </AuthContext.Provider>
   );

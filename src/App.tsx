@@ -43,7 +43,7 @@ function isPastoralRole(role: Role) {
 }
 
 function ChurchApp() {
-  const { user, pages } = useAuth();
+  const { user, pages, branding } = useAuth();
   const { data, loading, reload } = useBootstrap(!!user);
   const location = useLocation();
   const navigate = useNavigate();
@@ -63,9 +63,9 @@ function ChurchApp() {
   if (!user) return null;
 
   const layoutSettings = {
-    name: (data?.settings?.name as string) || "Christ Embassy",
-    logoUrl: data?.settings?.logoUrl as string | undefined,
-    tagline: data?.settings?.tagline as string | undefined,
+    name: (data?.settings?.name as string) || branding.name,
+    logoUrl: (data?.settings?.logoUrl as string | undefined) || branding.logoUrl,
+    tagline: (data?.settings?.tagline as string | undefined) || branding.tagline,
   };
 
   if (loading || !data) {
