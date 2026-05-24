@@ -16,6 +16,7 @@ export function ChurchBrand({
   tagline,
   size = "md",
   theme = "sidebar",
+  layout = "row",
   className,
 }: {
   name: string;
@@ -23,6 +24,7 @@ export function ChurchBrand({
   tagline?: string;
   size?: "sm" | "md" | "lg";
   theme?: "sidebar" | "header";
+  layout?: "row" | "stacked";
   className?: string;
 }) {
   const [logoFailed, setLogoFailed] = useState(false);
@@ -49,44 +51,66 @@ export function ChurchBrand({
     </div>
   );
 
+  const logoOrInitials = showLogo ? (
+    <img
+      src={logoUrl}
+      alt=""
+      onError={() => setLogoFailed(true)}
+      className={cn(
+        "shrink-0 rounded-lg object-contain",
+        logoSize,
+        isHeader ? "bg-white/15 ring-2 ring-white/20" : "bg-white/10"
+      )}
+    />
+  ) : (
+    initialsBadge
+  );
+
+  const title = (
+    <p
+      className={cn(
+        "truncate font-semibold leading-tight tracking-tight",
+        titleSize,
+        layout === "stacked" && "whitespace-normal text-center",
+        isHeader && "text-white"
+      )}
+    >
+      {name}
+    </p>
+  );
+
+  const subtitle = tagline ? (
+    <p
+      className={cn(
+        "truncate text-xs leading-snug",
+        layout === "stacked" && "whitespace-normal text-center",
+        isHeader ? "text-white/70" : "opacity-70"
+      )}
+    >
+      {tagline}
+    </p>
+  ) : !isHeader ? (
+    <p className={cn("text-xs opacity-70", layout === "stacked" && "text-center")}>Church Management</p>
+  ) : null;
+
+  if (layout === "stacked") {
+    return (
+      <div className={cn("flex flex-col items-center gap-2 text-center", className)}>
+        {logoOrInitials}
+        <div className="min-w-0">
+          {title}
+          {subtitle}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={cn("flex min-w-0 items-center gap-3", className)}>
-      {showLogo ? (
-        <img
-          src={logoUrl}
-          alt=""
-          onError={() => setLogoFailed(true)}
-          className={cn(
-            "shrink-0 rounded-lg object-contain",
-            logoSize,
-            isHeader ? "bg-white/15 ring-2 ring-white/20" : "bg-white/10"
-          )}
-        />
-      ) : (
-        initialsBadge
-      )}
+      {logoOrInitials}
       <div className="min-w-0">
-        <p
-          className={cn(
-            "truncate font-semibold leading-tight tracking-tight",
-            titleSize,
-            isHeader && "text-white"
-          )}
-        >
-          {name}
-        </p>
-        {tagline ? (
-          <p
-            className={cn(
-              "truncate text-xs leading-snug",
-              isHeader ? "text-white/70" : "opacity-70"
-            )}
-          >
-            {tagline}
-          </p>
-        ) : !isHeader ? (
-          <p className="text-xs opacity-70">Church Management</p>
-        ) : null}
+        {title}
+        {subtitle}
       </div>
     </div>
   );

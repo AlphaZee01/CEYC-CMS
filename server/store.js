@@ -29,12 +29,20 @@ function adaptSql(sql) {
       /INSERT OR IGNORE INTO member_departments \(member_id, department_id\) VALUES \(\?, \?\)/gi,
       "INSERT INTO member_departments (member_id, department_id) VALUES (?, ?) ON CONFLICT DO NOTHING"
     )
-    .replace(/\bactive\s*=\s*1\b/gi, "active IS TRUE")
-    .replace(/\bread\s*=\s*1\b/gi, "read IS TRUE")
-    .replace(/\bused\s*=\s*0\b/gi, "used IS FALSE")
-    .replace(/\bbroadcast\s*=\s*1\b/gi, "broadcast IS TRUE")
-    .replace(/\bpinned\s*=\s*1\b/gi, "pinned IS TRUE")
+    .replace(/\bactive\s*=\s*1\b/gi, "active = TRUE")
+    .replace(/\bactive\s*=\s*0\b/gi, "active = FALSE")
+    .replace(/\bread\s*=\s*1\b/gi, "read = TRUE")
+    .replace(/\bread\s*=\s*0\b/gi, "read = FALSE")
+    .replace(/\bused\s*=\s*0\b/gi, "used = FALSE")
+    .replace(/\bused\s*=\s*1\b/gi, "used = TRUE")
+    .replace(/\bbroadcast\s*=\s*1\b/gi, "broadcast = TRUE")
+    .replace(/\bbroadcast\s*=\s*0\b/gi, "broadcast = FALSE")
+    .replace(/\bpinned\s*=\s*1\b/gi, "pinned = TRUE")
+    .replace(/\bpinned\s*=\s*0\b/gi, "pinned = FALSE")
     .replace(/\bis_newcomer\s*=\s*1\b/gi, "is_newcomer = TRUE")
+    .replace(/\bis_newcomer\s*=\s*0\b/gi, "is_newcomer = FALSE")
+    .replace(/\bis_private\s*=\s*0\b/gi, "is_private = FALSE")
+    .replace(/\bis_private\s*=\s*1\b/gi, "is_private = TRUE")
     .replace(/strftime\('%Y-%m', joined_at\)/gi, "to_char(joined_at::date, 'YYYY-MM')");
 }
 

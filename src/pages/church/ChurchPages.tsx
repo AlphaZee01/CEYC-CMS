@@ -143,7 +143,7 @@ interface DashboardOverview {
   previousService: { date: string; present: number; rate: number } | null;
   lastServiceNewcomers: {
     members: { id: string; name: string; role: string; phone: string | null; joinedAt: string }[];
-    guests: { name: string; contact: string | null }[];
+    guests: { id?: string; name: string; contact: string | null }[];
     total: number;
   };
   attendanceDelta: number | null;
@@ -424,8 +424,8 @@ function PastorDashboard({
                           <Badge color="teal">Member</Badge>
                         </li>
                       ))}
-                      {lastServiceNewcomers.guests.map((g) => (
-                        <li key={g.name} className="flex items-center justify-between gap-2 text-sm">
+                      {lastServiceNewcomers.guests.map((g, i) => (
+                        <li key={g.id ?? `guest-${i}-${g.name}`} className="flex items-center justify-between gap-2 text-sm">
                           <div className="min-w-0">
                             <p className="truncate font-medium">{g.name}</p>
                             {g.contact && <p className="text-xs text-muted-foreground">{g.contact}</p>}
@@ -995,6 +995,10 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
   const [assignModal, setAssignModal] = useState<{ type: "fellowship" | "cell"; id: string } | null>(null);
   const [assignLeader, setAssignLeader] = useState("");
   const [assignSubLeader, setAssignSubLeader] = useState("");
+  const [membersModal, setMembersModal] = useState<{ cellId: string; cellName: string } | null>(null);
+  const [cellMemberIds, setCellMemberIds] = useState<string[]>([]);
+  const [memberSearch, setMemberSearch] = useState("");
+  const [savingMembers, setSavingMembers] = useState(false);
 
   const load = useCallback(() => {
     Promise.all([api<Fellowship[]>("/fellowships"), api<Cell[]>("/cells")])
@@ -1045,6 +1049,41 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
     onRefresh();
   };
 
+  const openMembersModal = (cell: Cell) => {
+    setMembersModal({ cellId: cell.id, cellName: cell.name });
+    setCellMemberIds(members.filter((m) => m.cellId === cell.id && m.active).map((m) => m.id));
+    setMemberSearch("");
+  };
+
+  const saveCellMembers = async () => {
+    if (!membersModal) return;
+    setSavingMembers(true);
+    try {
+      await api(`/cells/${membersModal.cellId}/members`, {
+        method: "PUT",
+        body: JSON.stringify({ memberIds: cellMemberIds }),
+      });
+      setMembersModal(null);
+      onRefresh();
+    } finally {
+      setSavingMembers(false);
+    }
+  };
+
+  const removeFromCell = async (cellId: string, memberId: string) => {
+    const current = members.filter((m) => m.cellId === cellId && m.active).map((m) => m.id);
+    await api(`/cells/${cellId}/members`, {
+      method: "PUT",
+      body: JSON.stringify({ memberIds: current.filter((id) => id !== memberId) }),
+    });
+    onRefresh();
+  };
+
+  const assignableMembers = members
+    .filter((m) => m.active)
+    .filter((m) => !memberSearch || m.name.toLowerCase().includes(memberSearch.toLowerCase()) || m.email.toLowerCase().includes(memberSearch.toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -1091,16 +1130,39 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
                     Leader: {memberName(members, c.leaderId)} · Sub: {memberName(members, c.subLeaderId)} · {cellMembers.length} members
                   </p>
                   {canManageMembers(currentUser.role) && (
-                    <Btn variant="ghost" className="mt-2 !px-0 !py-1 text-xs" onClick={() => {
-                      setAssignModal({ type: "cell", id: c.id });
-                      setAssignLeader(c.leaderId || "");
-                      setAssignSubLeader(c.subLeaderId || "");
-                    }}>Assign leaders</Btn>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Btn variant="ghost" className="!px-0 !py-1 text-xs" onClick={() => {
+                        setAssignModal({ type: "cell", id: c.id });
+                        setAssignLeader(c.leaderId || "");
+                        setAssignSubLeader(c.subLeaderId || "");
+                      }}>Assign leaders</Btn>
+                      <Btn variant="ghost" className="!px-0 !py-1 text-xs" onClick={() => openMembersModal(c)}>
+                        <UserPlus className="h-3.5 w-3.5" /> Add members
+                      </Btn>
+                    </div>
                   )}
                   {expanded === c.id && (
                     <ul className="mt-3 space-y-1 border-t pt-2 text-sm">
+                      {cellMembers.length === 0 && (
+                        <li className="text-xs text-muted-foreground">No members yet. Use Add members to assign people to this cell.</li>
+                      )}
                       {cellMembers.map((m) => (
-                        <li key={m.id} className="flex justify-between"><span>{m.name}</span><Badge color="gray">{m.role}</Badge></li>
+                        <li key={m.id} className="flex items-center justify-between gap-2">
+                          <span>{m.name}</span>
+                          <div className="flex items-center gap-2">
+                            <Badge color="gray">{m.role}</Badge>
+                            {canManageMembers(currentUser.role) && (
+                              <button
+                                type="button"
+                                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive"
+                                title="Remove from cell"
+                                onClick={() => removeFromCell(c.id, m.id)}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </li>
                       ))}
                     </ul>
                   )}
@@ -1132,6 +1194,48 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
             <Select label="Sub-cell Leader" value={assignSubLeader} onChange={setAssignSubLeader} options={[{ value: "", label: "Unassigned" }, ...members.map((m) => ({ value: m.id, label: m.name }))]} />
           )}
           <Btn onClick={saveAssignment}>Save</Btn>
+        </div>
+      </Modal>
+      <Modal open={!!membersModal} onClose={() => setMembersModal(null)} title={membersModal ? `Members — ${membersModal.cellName}` : "Cell members"}>
+        <div className="space-y-3">
+          <Input label="Search" value={memberSearch} onChange={setMemberSearch} placeholder="Name or email" />
+          <p className="text-xs text-muted-foreground">
+            {cellMemberIds.length} selected · check members to add or remove from this cell
+          </p>
+          <div className="max-h-64 space-y-1 overflow-y-auto rounded-lg border p-2">
+            {assignableMembers.map((m) => {
+              const inOtherCell = m.cellId && m.cellId !== membersModal?.cellId;
+              const otherCellName = inOtherCell ? cells.find((c) => c.id === m.cellId)?.name : null;
+              return (
+                <label key={m.id} className="flex items-start gap-2 rounded-md p-1.5 text-sm hover:bg-muted/50">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={cellMemberIds.includes(m.id)}
+                    onChange={(e) => {
+                      setCellMemberIds((ids) =>
+                        e.target.checked ? [...ids, m.id] : ids.filter((id) => id !== m.id)
+                      );
+                    }}
+                  />
+                  <span>
+                    <span className="font-medium">{m.name}</span>
+                    {otherCellName && (
+                      <span className="ml-1 text-xs text-amber-600">(moves from {otherCellName})</span>
+                    )}
+                    <span className="block text-xs text-muted-foreground">{m.role}{m.email ? ` · ${m.email}` : ""}</span>
+                  </span>
+                </label>
+              );
+            })}
+            {assignableMembers.length === 0 && (
+              <p className="p-2 text-sm text-muted-foreground">No members match your search.</p>
+            )}
+          </div>
+          <ModalFooter>
+            <Btn variant="ghost" onClick={() => setMembersModal(null)}>Cancel</Btn>
+            <Btn onClick={saveCellMembers} disabled={savingMembers}>{savingMembers ? "Saving..." : "Save members"}</Btn>
+          </ModalFooter>
         </div>
       </Modal>
     </div>
@@ -1600,16 +1704,28 @@ export function ReportsPage({ departments }: PageProps) {
   const [growth, setGrowth] = useState<{ month: string; members: number }[]>([]);
   const [deptData, setDeptData] = useState<{ name: string; value: number }[]>([]);
   const [trends, setTrends] = useState<{ date: string; cell_name: string; present_count: number }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    Promise.all([
-      api<{ memberGrowth: typeof growth; departmentParticipation: typeof deptData }>("/reports/analytics"),
-      api<typeof trends>("/attendance/trends"),
-    ]).then(([analytics, trendRows]) => {
-      setGrowth(analytics.memberGrowth.map((g) => ({ month: g.month?.slice(5) || g.month, members: g.members })));
-      setDeptData(analytics.departmentParticipation.map((d) => ({ name: d.name.split(" ")[0], value: d.value })));
-      setTrends(trendRows);
-    }).catch(() => {});
+    setLoading(true);
+    setError("");
+    api<{
+      memberGrowth: { month: string; members: number }[];
+      departmentParticipation: { name: string; value: number }[];
+      attendanceTrends: { date: string; cell_name: string; present_count: number }[];
+    }>("/reports/analytics")
+      .then((analytics) => {
+        setGrowth(analytics.memberGrowth.map((g) => ({ month: g.month?.slice(5) || g.month, members: Number(g.members) })));
+        setDeptData(
+          analytics.departmentParticipation
+            .filter((d) => Number(d.value) > 0)
+            .map((d) => ({ name: d.name.split(" ")[0], value: Number(d.value) }))
+        );
+        setTrends(analytics.attendanceTrends || []);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load reports"))
+      .finally(() => setLoading(false));
   }, []);
 
   const trendByWeek = trends.reduce<Record<string, Record<string, number | string>>>((acc, row) => {
@@ -1630,26 +1746,41 @@ export function ReportsPage({ departments }: PageProps) {
   return (
     <div className="space-y-6">
       <PageHeader {...pageHeaderProps("reports")} title="Reports & Analytics" subtitle="Growth, attendance, and participation" action={<Btn variant="accent" onClick={handleExport}><Download className="h-4 w-4" /> Export CSV</Btn>} />
+      {error && (
+        <Card className="border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+          Could not load report data: {error}. Try refreshing the page.
+        </Card>
+      )}
+      {loading ? (
+        <Card className="p-8 text-center text-sm text-muted-foreground">Loading reports…</Card>
+      ) : (
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <h2 className="mb-4 font-semibold">Member Growth</h2>
+          {growth.length === 0 ? (
+            <p className="py-12 text-center text-sm text-muted-foreground">No member join dates recorded yet.</p>
+          ) : (
           <ResponsiveContainer width="100%" height={220}>
             <LineChart data={growth}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="month" />
-              <YAxis />
+              <YAxis allowDecimals={false} />
               <Tooltip />
               <Line type="monotone" dataKey="members" stroke={CHART_COLORS[0]} strokeWidth={2} />
             </LineChart>
           </ResponsiveContainer>
+          )}
         </Card>
         <Card>
           <h2 className="mb-4 font-semibold">Attendance by Cell</h2>
+          {barData.length === 0 ? (
+            <p className="py-12 text-center text-sm text-muted-foreground">No attendance recorded in the last 12 months. Record cell or service attendance to see trends here.</p>
+          ) : (
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={barData}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="week" />
-              <YAxis />
+              <YAxis allowDecimals={false} />
               <Tooltip />
               <Legend />
               {Object.keys(barData[0] || {}).filter((k) => k !== "week").map((key, i) => (
@@ -1657,9 +1788,13 @@ export function ReportsPage({ departments }: PageProps) {
               ))}
             </BarChart>
           </ResponsiveContainer>
+          )}
         </Card>
         <Card className="lg:col-span-2">
           <h2 className="mb-4 font-semibold">Department Participation</h2>
+          {deptData.length === 0 ? (
+            <p className="py-12 text-center text-sm text-muted-foreground">No department assignments yet. Add members to departments on the Departments page.</p>
+          ) : (
           <ResponsiveContainer width="100%" height={240}>
             <PieChart>
               <Pie data={deptData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label>
@@ -1670,8 +1805,10 @@ export function ReportsPage({ departments }: PageProps) {
               <Tooltip />
             </PieChart>
           </ResponsiveContainer>
+          )}
         </Card>
       </div>
+      )}
     </div>
   );
 }

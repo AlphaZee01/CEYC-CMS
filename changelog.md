@@ -1,5 +1,42 @@
 # Changelog
 
+## [2026-05-24] — Login page church branding
+
+### Changed
+- **Login page** shows church **name**, **logo**, and **tagline** from Settings (via public `/api/public/branding` — no sign-in required)
+
+## [2026-05-24] — Reports page empty state fix
+
+### Fixed
+- **Reports & Analytics** no longer stays blank when one API call fails — single `/reports/analytics` endpoint returns growth, departments, and attendance trends
+- **Postgres crash** on `/api/departments` (missing `await` on nested query) — this was killing the API server and breaking all pages including Reports
+- Empty-state messages when there is no attendance or department data yet; loading and error banners on Reports page
+- Attendance trends now include service attendance and look back 12 months (was cell-only, 60 days)
+
+## [2026-05-24] — Persist page on reload
+
+### Fixed
+- **Navigation**: active page is synced to the URL (`/app/members`, `/app/cells`, etc.) so browser refresh stays on the current page instead of resetting to Dashboard
+
+## [2026-05-24] — Add members to cells
+
+### Added
+- **Cells page**: **Add members** on each cell — multi-select modal to assign/remove members; quick remove from expanded member list
+- **API** `PUT /api/cells/:id/members` — bulk sync of cell membership (sets `cell_id` + fellowship)
+
+## [2026-05-24] — Dev server log noise
+
+### Fixed
+- **Realtime broadcast**: server chat push uses `channel.httpSend()` instead of deprecated `send()` REST fallback
+- **SMTP placeholder**: `smtp.example.com` in `.env` is treated as unconfigured (no failed send attempts on startup/jobs)
+
+## [2026-05-24] — Console warnings cleanup
+
+### Fixed
+- **Chat thread 500**: Postgres boolean comparisons (`broadcast = 0`, `read = 1`, etc.) now use `= TRUE/FALSE` instead of integer `0/1`
+- **Duplicate React keys** on pastor dashboard guest list (`key={g.name}` → unique guest `id`)
+- React Router v7 future-flag warnings (`v7_startTransition`, `v7_relativeSplatPath`)
+
 ## [2026-05-24] — Logo uploads on Render & PWA meta fix
 
 ### Fixed

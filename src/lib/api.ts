@@ -11,6 +11,19 @@ export function setToken(token: string | null) {
   else localStorage.removeItem("celcm_token");
 }
 
+export async function publicApi<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string>),
+  };
+  if (!(options.body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+  }
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data as T;
+}
+
 export async function api<T>(
   path: string,
   options: RequestInit = {}

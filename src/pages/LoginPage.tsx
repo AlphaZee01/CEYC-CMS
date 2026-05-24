@@ -1,19 +1,38 @@
-import { useState, type FormEvent } from "react";
-import { Church } from "lucide-react";
+import { useState, useEffect, type FormEvent } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
-import { api } from "@/lib/api";
+import { api, publicApi } from "@/lib/api";
 import { resetPasswordForEmail, supabaseConfigured } from "@/lib/supabase";
-import { Btn, Input, Card, IconBox } from "@/components/church/ui";
+import { Btn, Input, Card } from "@/components/church/ui";
+import { ChurchBrand } from "@/components/church/ChurchBrand";
+
+const DEFAULT_BRANDING = {
+  name: "Christ Embassy",
+  tagline: "Local Church Management System",
+  logoUrl: undefined as string | undefined,
+};
 
 export default function LoginPage() {
   const { login, user } = useAuth();
+  const [branding, setBranding] = useState(DEFAULT_BRANDING);
   const [email, setEmail] = useState("pastor@celcm.org");
   const [password, setPassword] = useState("ChangeMe123!");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [forgotMode, setForgotMode] = useState(false);
   const [resetInfo, setResetInfo] = useState("");
+
+  useEffect(() => {
+    publicApi<{ name: string; tagline: string; logoUrl: string | null }>("/public/branding")
+      .then((b) =>
+        setBranding({
+          name: b.name,
+          tagline: b.tagline,
+          logoUrl: b.logoUrl || undefined,
+        })
+      )
+      .catch(() => {});
+  }, []);
 
   if (user) return <Navigate to="/app" replace />;
 
@@ -62,11 +81,15 @@ export default function LoginPage() {
     <div className="flex min-h-[100dvh] items-center justify-center bg-[hsl(var(--sidebar-background))] p-4 pb-safe">
       <Card className="w-full max-w-md">
         <div className="mb-6 flex flex-col items-center text-center">
-          <IconBox icon={Church} tone="blue" size="lg" variant="solid" className="mb-3 h-14 w-14 rounded-xl" />
-          <h1 className="text-xl font-bold text-primary">Christ Embassy LCM</h1>
-          <p className="text-sm text-muted-foreground">Local Church Management System</p>
+          <ChurchBrand
+            name={branding.name}
+            logoUrl={branding.logoUrl}
+            tagline={branding.tagline}
+            size="lg"
+            layout="stacked"
+          />
           {supabaseConfigured && (
-            <p className="mt-1 text-xs text-accent">Secured with Supabase Auth</p>
+            <p className="mt-3 text-xs text-accent">Secured with Supabase Auth</p>
           )}
         </div>
         {forgotMode ? (

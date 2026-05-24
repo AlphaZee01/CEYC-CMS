@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { AuthProvider, useAuth, useBootstrap } from "@/context/AuthContext";
 import LoginPage from "@/pages/LoginPage";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
@@ -23,7 +23,20 @@ import {
   ReportSubmissionsPage,
 } from "@/pages/church/ChurchPages";
 import type { PageId, Member, Cell, Fellowship, Department, Role } from "@/types/church";
-import { useState, useEffect } from "react";
+import { PAGE_META } from "@/types/church";
+import { useEffect } from "react";
+
+const PAGE_IDS = new Set<PageId>(PAGE_META.map((p) => p.id));
+
+function pageFromPath(pathname: string): PageId {
+  const segment = pathname.replace(/^\/app\/?/, "").split("/")[0];
+  if (segment && PAGE_IDS.has(segment as PageId)) return segment as PageId;
+  return "dashboard";
+}
+
+function pageToPath(page: PageId): string {
+  return page === "dashboard" ? "/app" : `/app/${page}`;
+}
 
 function isPastoralRole(role: Role) {
   return role === "Senior Pastor" || role === "Associate Pastor" || role === "Admin";
@@ -32,13 +45,20 @@ function isPastoralRole(role: Role) {
 function ChurchApp() {
   const { user, pages } = useAuth();
   const { data, loading, reload } = useBootstrap(!!user);
-  const [activePage, setActivePage] = useState<PageId>("dashboard");
+  const location = useLocation();
+  const navigate = useNavigate();
+  const activePage = pageFromPath(location.pathname);
 
   useEffect(() => {
-    if (pages.length && !pages.includes(activePage)) {
-      setActivePage(pages[0]);
+    if (!pages.length) return;
+    if (!pages.includes(activePage)) {
+      navigate(pageToPath(pages[0]), { replace: true });
     }
-  }, [pages, activePage]);
+  }, [pages, activePage, navigate]);
+
+  const setActivePage = (page: PageId) => {
+    navigate(pageToPath(page));
+  };
 
   if (!user) return null;
 
@@ -118,7 +138,7 @@ function ProtectedApp() {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AuthProvider>
         <Routes>
           <Route path="/" element={<LoginPage />} />

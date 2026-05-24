@@ -103,6 +103,17 @@ async function loadMember(db, id) {
   return memberToJson(row, await getMemberDepartments(db, id));
 }
 
+// ─── Public (no auth) ────────────────────────────────────────────────────────
+
+app.get("/api/public/branding", async (_req, res) => {
+  const s = await getDb().prepare("SELECT name, tagline, logo_url FROM church_settings WHERE id = 1").get();
+  res.json({
+    name: s?.name || "Christ Embassy",
+    tagline: s?.tagline || "Local Church Management System",
+    logoUrl: s?.logo_url || null,
+  });
+});
+
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
 app.post("/api/auth/login", async (req, res) => {
@@ -435,20 +446,53 @@ app.put("/api/cells/:id", authMiddleware, requirePage("cells"), async (req, res)
   });
 });
 
+app.put("/api/cells/:id/members", authMiddleware, requirePage("cells"), async (req, res) => {
+  const db = getDb();
+  const { memberIds } = req.body;
+  if (!Array.isArray(memberIds)) return res.status(400).json({ error: "memberIds array required" });
+
+  const cell = await db.prepare("SELECT id, name, fellowship_id FROM cells WHERE id = ?").get(req.params.id);
+  if (!cell) return res.status(404).json({ error: "Cell not found" });
+
+  const { role, fellowshipId: userFelId } = req.user.member;
+  if (role === "Fellowship Leader" && userFelId && cell.fellowship_id !== userFelId) {
+    return res.status(403).json({ error: "Cannot manage cells outside your fellowship" });
+  }
+
+  const currentRows = await db.prepare("SELECT id FROM members WHERE cell_id = ?").all(req.params.id);
+  const currentIds = new Set(currentRows.map((r) => r.id));
+  const nextIds = new Set(memberIds.filter(Boolean));
+
+  for (const id of currentIds) {
+    if (!nextIds.has(id)) {
+      await db.prepare("UPDATE members SET cell_id = NULL, updated_at = datetime('now') WHERE id = ?").run(id);
+    }
+  }
+  for (const mid of nextIds) {
+    await db.prepare(
+      "UPDATE members SET cell_id = ?, fellowship_id = ?, updated_at = datetime('now') WHERE id = ? AND active = 1"
+    ).run(req.params.id, cell.fellowship_id, mid);
+  }
+
+  await logActivity(db, `Cell members updated: ${cell.name}`, req.user.member.id);
+  const updated = await db.prepare("SELECT id FROM members WHERE cell_id = ? AND active = 1").all(req.params.id);
+  res.json({ memberIds: updated.map((r) => r.id) });
+});
+
 // ─── Departments ───────────────────────────────────────────────────────────────
 
 app.get("/api/departments", authMiddleware, requirePage("departments"), async (req, res) => {
   const db = getDb();
+  const deptRows = await db.prepare("SELECT * FROM departments ORDER BY name").all();
   res.json(
-    (await db.prepare("SELECT * FROM departments ORDER BY name").all()).map((d) => ({
-      id: d.id,
-      name: d.name,
-      headId: d.head_id,
-      memberIds: db
-        .prepare("SELECT member_id FROM member_departments WHERE department_id = ?")
-        .all(d.id)
-        .map((r) => r.member_id),
-    }))
+    await Promise.all(
+      deptRows.map(async (d) => {
+        const memberIds = (await db
+          .prepare("SELECT member_id FROM member_departments WHERE department_id = ?")
+          .all(d.id)).map((r) => r.member_id);
+        return { id: d.id, name: d.name, headId: d.head_id, memberIds };
+      })
+    )
   );
 });
 
@@ -716,6 +760,7 @@ app.get("/api/messages/thread/:partnerId", authMiddleware, requirePage("communic
   const mid = req.user.member.id;
   const { partnerId } = req.params;
 
+  try {
   let rows;
   if (partnerId === "__broadcast__") {
     rows = await db
@@ -770,6 +815,10 @@ app.get("/api/messages/thread/:partnerId", authMiddleware, requirePage("communic
   );
 
   res.json(result);
+  } catch (err) {
+    console.error("messages/thread:", err.message);
+    res.status(500).json({ error: "Failed to load conversation" });
+  }
 });
 
 app.get("/api/messages", authMiddleware, requirePage("communications"), async (req, res) => {
@@ -1317,21 +1366,46 @@ app.post("/api/media", authMiddleware, requirePage("media"), upload.single("file
 
 app.get("/api/reports/analytics", authMiddleware, requirePage("reports"), async (req, res) => {
   const db = getDb();
-  const growth = await db
-    .prepare(
-      `SELECT strftime('%Y-%m', joined_at) as month, COUNT(*) as members
-       FROM members WHERE active = 1 GROUP BY month ORDER BY month`
-    )
-    .all();
-  const dept = await db
-    .prepare(
-      `SELECT d.name, COUNT(md.member_id) + CASE WHEN d.head_id IS NOT NULL THEN 1 ELSE 0 END as value
-       FROM departments d
-       LEFT JOIN member_departments md ON md.department_id = d.id
-       GROUP BY d.id, d.name, d.head_id`
-    )
-    .all();
-  res.json({ memberGrowth: growth, departmentParticipation: dept });
+  try {
+    const growth = await db
+      .prepare(
+        `SELECT strftime('%Y-%m', joined_at) as month, COUNT(*) as members
+         FROM members WHERE active = 1 GROUP BY month ORDER BY month`
+      )
+      .all();
+    const dept = await db
+      .prepare(
+        `SELECT d.name, COUNT(md.member_id) + CASE WHEN d.head_id IS NOT NULL THEN 1 ELSE 0 END as value
+         FROM departments d
+         LEFT JOIN member_departments md ON md.department_id = d.id
+         GROUP BY d.id, d.name, d.head_id`
+      )
+      .all();
+    const trends = await db
+      .prepare(
+        `SELECT ar.date, COALESCE(c.name, 'Sunday Service') as cell_name,
+         SUM(CASE WHEN am.status = 'present' THEN 1 ELSE 0 END) as present_count
+         FROM attendance_records ar
+         JOIN attendance_members am ON am.record_id = ar.id
+         LEFT JOIN cells c ON c.id = ar.cell_id
+         WHERE ar.date >= date('now', '-365 days')
+         GROUP BY ar.date, ar.cell_id, c.name, ar.type
+         ORDER BY ar.date`
+      )
+      .all();
+    res.json({
+      memberGrowth: growth.map((g) => ({ month: g.month, members: Number(g.members) })),
+      departmentParticipation: dept.map((d) => ({ name: d.name, value: Number(d.value) })),
+      attendanceTrends: trends.map((t) => ({
+        date: t.date,
+        cell_name: t.cell_name,
+        present_count: Number(t.present_count),
+      })),
+    });
+  } catch (err) {
+    console.error("Reports analytics error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get("/api/reports/submissions", authMiddleware, requirePage("report-submissions"), async (req, res) => {
@@ -1580,7 +1654,7 @@ app.get("/api/dashboard/overview", authMiddleware, requirePage("dashboard"), asy
            WHERE am.record_id = ? AND am.status = 'present' AND am.is_newcomer = 1`
         )
         .all(recordId),
-      db.prepare("SELECT name, contact FROM attendance_guests WHERE record_id = ? ORDER BY name").all(recordId),
+      db.prepare("SELECT id, name, contact FROM attendance_guests WHERE record_id = ? ORDER BY name").all(recordId),
     ]);
     const members = memberRows.map((m) => ({
       id: m.id,
@@ -1589,7 +1663,7 @@ app.get("/api/dashboard/overview", authMiddleware, requirePage("dashboard"), asy
       phone: m.phone,
       joinedAt: m.joined_at,
     }));
-    const guests = guestRows.map((g) => ({ name: g.name, contact: g.contact }));
+    const guests = guestRows.map((g) => ({ id: g.id, name: g.name, contact: g.contact }));
     return { members, guests, total: members.length + guests.length };
   }
 

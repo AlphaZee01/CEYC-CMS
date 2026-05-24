@@ -23,12 +23,16 @@ export async function broadcastChatMessage(message, memberIds) {
       const channel = sb.channel(`member:${memberId}`, {
         config: { broadcast: { self: true } },
       });
-      await channel.subscribe();
-      await channel.send({
-        type: "broadcast",
-        event: "new_message",
-        payload: message,
-      });
+      // REST broadcast — no WebSocket subscribe needed; avoids send() fallback warning
+      if (typeof channel.httpSend === "function") {
+        await channel.httpSend("new_message", message);
+      } else {
+        await channel.send({
+          type: "broadcast",
+          event: "new_message",
+          payload: message,
+        });
+      }
       await sb.removeChannel(channel);
     })
   );

@@ -9,8 +9,12 @@ const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER || "noreply@celcm.org";
 const SMTP_SECURE = process.env.SMTP_SECURE === "true";
 const APP_URL = getAppUrl();
 
+const PLACEHOLDER_SMTP_HOSTS = new Set(["smtp.example.com", "example.com"]);
+
 export function isEmailConfigured() {
-  return !!(SMTP_HOST && SMTP_USER && SMTP_PASS);
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) return false;
+  if (PLACEHOLDER_SMTP_HOSTS.has(SMTP_HOST.toLowerCase())) return false;
+  return true;
 }
 
 function createTransport() {
