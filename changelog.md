@@ -1,5 +1,13 @@
 # Changelog
 
+## [2026-05-24] — Sign-in debug logs
+
+### Added
+- **Sign-in trace** in the browser DevTools console only (`[sign-in +Nms]` steps) when running `npm run dev`
+
+### Changed
+- Removed on-page sign-in log panel; production builds do not emit sign-in console logs
+
 ## [2026-05-24] — Stale auth session and broken logo URL
 
 ### Fixed

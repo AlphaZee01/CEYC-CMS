@@ -10,6 +10,7 @@ import {
 } from "@/lib/supabase";
 import type { AuthUser, PageId } from "@/types/church";
 import { cacheBranding, getCachedBranding, type ChurchBranding, DEFAULT_BRANDING } from "@/lib/branding";
+import { authLog, authLogError, authLogStart, authLogTimed } from "@/lib/auth-log";
 
 interface AuthState {
   user: AuthUser | null;
@@ -56,12 +57,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     refreshPromiseRef.current = (async () => {
       try {
-        const data = await authApi.me();
+        const data = await authLogTimed("GET /api/auth/me", () => authApi.me());
         setUser(data.user as AuthUser);
         setPages(data.pages as PageId[]);
         applyBranding(setBranding, data.branding);
+        authLog("Session loaded", (data.user as AuthUser)?.member?.email);
       } catch (err) {
         const message = err instanceof Error ? err.message : "";
+        authLogError("Session refresh failed", err);
         if (isRefreshTokenError(message) || /session expired|authentication required|invalid session/i.test(message)) {
           await clearSession();
         } else {
@@ -88,6 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (supabaseConfigured && supabase) {
           const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
             if (!mounted) return;
+            authLog(`Supabase auth: ${event}`, session ? "has session" : "no session");
 
             if (event === "SIGNED_OUT" || event === "USER_DELETED") {
               setUser(null);
@@ -133,17 +137,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const login = async (email: string, password: string) => {
+    authLogStart(`Sign-in: ${email}`);
     if (supabaseConfigured) {
-      await signInWithEmail(email, password);
+      await authLogTimed("Supabase signInWithPassword", () => signInWithEmail(email, password));
       await refresh();
+      authLog("Sign-in complete");
       return;
     }
-    const { token, user: u } = await authApi.login(email, password);
+    const { token, user: u } = await authLogTimed("POST /api/auth/login", () => authApi.login(email, password));
     setToken(token);
     setUser(u as AuthUser);
-    const me = await authApi.me();
+    const me = await authLogTimed("GET /api/auth/me", () => authApi.me());
     setPages(me.pages as PageId[]);
     applyBranding(setBranding, me.branding);
+    authLog("Sign-in complete");
   };
 
   const logout = async () => {
@@ -181,8 +188,9 @@ export function useBootstrap(enabled: boolean) {
     if (!enabled) return;
     setLoading(true);
     try {
-      const d = await api<typeof data>("/bootstrap");
+      const d = await authLogTimed("GET /api/bootstrap", () => api<typeof data>("/bootstrap"));
       setData(d);
+      authLog("Bootstrap loaded", `${(d?.members as unknown[])?.length ?? 0} members`);
     } finally {
       setLoading(false);
     }

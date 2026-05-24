@@ -1,4 +1,5 @@
 import { getSupabaseAccessToken, supabaseConfigured } from "@/lib/supabase";
+import { authLog } from "@/lib/auth-log";
 
 const API_BASE = "/api";
 
@@ -38,6 +39,7 @@ export async function api<T>(
   let token: string | null = null;
   if (supabaseConfigured) {
     token = await getSupabaseAccessToken();
+    if (token) authLog("Supabase access token ready");
   } else {
     token = getLegacyToken();
   }
