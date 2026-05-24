@@ -16,13 +16,32 @@ export const supabase = supabaseConfigured
     })
   : null;
 
+export function isRefreshTokenError(message?: string) {
+  return !!message && /refresh token/i.test(message);
+}
+
+/** Clear a revoked or expired Supabase session from local storage. */
+export async function clearStaleSupabaseSession() {
+  if (!supabase) return;
+  await supabase.auth.signOut({ scope: "local" });
+}
+
+export async function signOutSupabase(options?: { local?: boolean }) {
+  if (!supabase) return;
+  await supabase.auth.signOut({ scope: options?.local ? "local" : "global" });
+}
+
 export function memberChatChannel(memberId: string) {
   return `member:${memberId}`;
 }
 
 export async function getSupabaseAccessToken(): Promise<string | null> {
   if (!supabase) return null;
-  const { data } = await supabase.auth.getSession();
+  const { data, error } = await supabase.auth.getSession();
+  if (error && isRefreshTokenError(error.message)) {
+    await clearStaleSupabaseSession();
+    return null;
+  }
   return data.session?.access_token ?? null;
 }
 
@@ -30,10 +49,6 @@ export async function signInWithEmail(email: string, password: string) {
   if (!supabase) throw new Error("Supabase is not configured");
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) throw new Error(error.message);
-}
-
-export async function signOutSupabase() {
-  if (supabase) await supabase.auth.signOut();
 }
 
 export async function resetPasswordForEmail(email: string) {

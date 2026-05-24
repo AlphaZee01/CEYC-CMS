@@ -46,6 +46,13 @@ export async function api<T>(
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
   if (res.status === 401) {
     if (!supabaseConfigured) setToken(null);
+    else {
+      const { clearStaleSupabaseSession } = await import("@/lib/supabase");
+      await clearStaleSupabaseSession();
+    }
+    if (!window.location.pathname.startsWith("/app")) {
+      throw new Error("Session expired");
+    }
     window.location.href = "/";
     throw new Error("Session expired");
   }

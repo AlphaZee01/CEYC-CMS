@@ -26,7 +26,7 @@ import { ensureBirthdayData } from "./birthday-seed.js";
 import { canViewBirthdays, getBirthdaysForMonth } from "./birthdays.js";
 import { syncAuthUsers, createSupabaseAuthUser, updateSupabaseAuthPassword } from "./auth-sync.js";
 import { useSupabaseAuth } from "./supabase.js";
-import { persistUploadedFile, brandingFromSettings, resolveAssetUrl } from "./storage.js";
+import { persistUploadedFile, brandingFromSettings, normalizeLogoUrlForStorage } from "./storage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -1513,13 +1513,14 @@ app.patch("/api/reports/submissions/:id", authMiddleware, requirePage("report-su
 app.get("/api/settings", authMiddleware, requirePage("settings"), async (req, res) => {
   const { isEmailConfigured } = await import("./email.js");
   const s = await getDb().prepare("SELECT * FROM church_settings WHERE id = 1").get();
+  const branding = brandingFromSettings(s, req);
   res.json({
-    name: s.name,
-    tagline: s.tagline,
+    name: branding.name,
+    tagline: branding.tagline,
     address: s.address,
     phone: s.phone,
     email: s.email,
-    logoUrl: s.logo_url,
+    logoUrl: branding.logoUrl,
     emailConfigured: isEmailConfigured(),
     database: usePostgres ? "postgresql" : "sqlite",
   });
@@ -1528,12 +1529,13 @@ app.get("/api/settings", authMiddleware, requirePage("settings"), async (req, re
 app.put("/api/settings", authMiddleware, async (req, res) => {
   if (!canManageSettings(req.user.member.role)) return res.status(403).json({ error: "Access denied" });
   const { name, tagline, address, phone, email, logoUrl } = req.body;
+  const storedLogoUrl = normalizeLogoUrlForStorage(logoUrl);
   await getDb()
     .prepare(
       `UPDATE church_settings SET name=?, tagline=?, address=?, phone=?, email=?, logo_url=? WHERE id=1`
     )
-    .run(name, tagline, address, phone, email, logoUrl);
-  res.json({ ok: true });
+    .run(name, tagline, address, phone, email, storedLogoUrl);
+  res.json({ ok: true, logoUrl: storedLogoUrl });
 });
 
 app.get("/api/users", authMiddleware, async (req, res) => {

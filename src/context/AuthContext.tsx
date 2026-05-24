@@ -5,6 +5,8 @@ import {
   supabaseConfigured,
   signInWithEmail,
   signOutSupabase,
+  clearStaleSupabaseSession,
+  isRefreshTokenError,
 } from "@/lib/supabase";
 import type { AuthUser, PageId } from "@/types/church";
 import { cacheBranding, getCachedBranding, type ChurchBranding, DEFAULT_BRANDING } from "@/lib/branding";
@@ -21,12 +23,33 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+function applyBranding(
+  setBranding: (b: ChurchBranding) => void,
+  branding?: { name: string; tagline?: string; logoUrl?: string | null }
+) {
+  if (!branding) return;
+  const next = {
+    name: branding.name,
+    tagline: branding.tagline,
+    logoUrl: branding.logoUrl || undefined,
+  };
+  setBranding(next);
+  cacheBranding(next);
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [pages, setPages] = useState<PageId[]>([]);
   const [branding, setBranding] = useState<ChurchBranding>(getCachedBranding);
   const [loading, setLoading] = useState(true);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
+
+  const clearSession = useCallback(async () => {
+    setUser(null);
+    setPages([]);
+    setToken(null);
+    if (supabaseConfigured) await clearStaleSupabaseSession();
+  }, []);
 
   const refresh = useCallback(async () => {
     if (refreshPromiseRef.current) return refreshPromiseRef.current;
@@ -36,23 +59,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const data = await authApi.me();
         setUser(data.user as AuthUser);
         setPages(data.pages as PageId[]);
-        if (data.branding) {
-          setBranding({
-            name: data.branding.name,
-            tagline: data.branding.tagline,
-            logoUrl: data.branding.logoUrl || undefined,
-          });
-          cacheBranding({
-            name: data.branding.name,
-            tagline: data.branding.tagline,
-            logoUrl: data.branding.logoUrl || undefined,
-          });
+        applyBranding(setBranding, data.branding);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "";
+        if (isRefreshTokenError(message) || /session expired|authentication required|invalid session/i.test(message)) {
+          await clearSession();
+        } else {
+          setUser(null);
+          setPages([]);
+          setToken(null);
+          if (supabaseConfigured) await signOutSupabase({ local: true });
         }
-      } catch {
-        setUser(null);
-        setPages([]);
-        setToken(null);
-        if (supabaseConfigured) await signOutSupabase();
       }
     })();
 
@@ -61,7 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       refreshPromiseRef.current = null;
     }
-  }, []);
+  }, [clearSession]);
 
   useEffect(() => {
     let mounted = true;
@@ -69,17 +86,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const init = async () => {
       try {
         if (supabaseConfigured && supabase) {
-          const { data: { session } } = await supabase.auth.getSession();
-          if (session && mounted) await refresh();
-
           const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
             if (!mounted) return;
-            if (session && event !== "PASSWORD_RECOVERY") await refresh();
+
+            if (event === "SIGNED_OUT" || event === "USER_DELETED") {
+              setUser(null);
+              setPages([]);
+              return;
+            }
+
+            if (event === "INITIAL_SESSION") {
+              if (session) await refresh();
+              else {
+                setUser(null);
+                setPages([]);
+              }
+              return;
+            }
+
+            if (session && (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")) {
+              if (event === "SIGNED_IN") await refresh();
+            }
+
             if (!session) {
               setUser(null);
               setPages([]);
             }
           });
+
           return () => subscription.unsubscribe();
         }
 
@@ -109,18 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(u as AuthUser);
     const me = await authApi.me();
     setPages(me.pages as PageId[]);
-    if (me.branding) {
-      setBranding({
-        name: me.branding.name,
-        tagline: me.branding.tagline,
-        logoUrl: me.branding.logoUrl || undefined,
-      });
-      cacheBranding({
-        name: me.branding.name,
-        tagline: me.branding.tagline,
-        logoUrl: me.branding.logoUrl || undefined,
-      });
-    }
+    applyBranding(setBranding, me.branding);
   };
 
   const logout = async () => {

@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-05-24] — Stale auth session and broken logo URL
+
+### Fixed
+- **Invalid Refresh Token**: expired Supabase sessions are cleared locally and the user is sent to login instead of retrying forever
+- **Logo 404**: mangled upload filenames (`https___host_path.png`) are recovered to the original `https://` URL; missing `/uploads/` paths no longer return broken image URLs
+
 ## [2026-05-24] — Mobile logo and faster sign-in
 
 ### Fixed
