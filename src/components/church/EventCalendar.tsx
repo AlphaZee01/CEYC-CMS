@@ -27,7 +27,7 @@ export function EventCalendar({
   };
 
   const modifiersClassNames = {
-    hasEvent: "relative after:absolute after:bottom-1 after:left-1/2 after:h-1.5 after:w-1.5 after:-translate-x-1/2 after:rounded-full after:bg-[hsl(174,55%,42%)]",
+    hasEvent: "relative after:absolute after:bottom-1 after:left-1/2 after:h-1.5 after:w-1.5 after:-translate-x-1/2 after:rounded-full after:bg-accent",
   };
 
   return (

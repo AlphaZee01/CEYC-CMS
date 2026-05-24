@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS members (
   fellowship_id TEXT,
   active BOOLEAN DEFAULT TRUE,
   joined_at TEXT NOT NULL,
+  date_of_birth TEXT,
   welfare_notes TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -28,7 +29,8 @@ CREATE TABLE IF NOT EXISTS members (
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT UNIQUE NOT NULL,
-  password_hash TEXT NOT NULL,
+  password_hash TEXT,
+  auth_user_id UUID UNIQUE,
   member_id TEXT NOT NULL UNIQUE REFERENCES members(id) ON DELETE CASCADE,
   access_level TEXT DEFAULT 'standard',
   created_at TIMESTAMPTZ DEFAULT NOW()
@@ -74,7 +76,15 @@ CREATE TABLE IF NOT EXISTS attendance_members (
   record_id TEXT NOT NULL REFERENCES attendance_records(id) ON DELETE CASCADE,
   member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
   status TEXT NOT NULL CHECK (status IN ('present', 'absent')),
+  is_newcomer BOOLEAN DEFAULT FALSE,
   PRIMARY KEY (record_id, member_id)
+);
+
+CREATE TABLE IF NOT EXISTS attendance_guests (
+  id TEXT PRIMARY KEY,
+  record_id TEXT NOT NULL REFERENCES attendance_records(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  contact TEXT
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -120,6 +130,9 @@ CREATE TABLE IF NOT EXISTS finances (
   amount DOUBLE PRECISION NOT NULL,
   member_id TEXT REFERENCES members(id) ON DELETE SET NULL,
   description TEXT,
+  purpose_type TEXT CHECK (purpose_type IN ('service', 'event', 'cell', 'outreach', 'general', 'other')),
+  purpose_id TEXT,
+  purpose_label TEXT,
   recorded_by TEXT REFERENCES members(id),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -261,3 +274,32 @@ CREATE INDEX IF NOT EXISTS idx_members_cell ON members(cell_id);
 CREATE INDEX IF NOT EXISTS idx_members_fellowship ON members(fellowship_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance_records(date);
 CREATE INDEX IF NOT EXISTS idx_finances_date ON finances(date);
+
+-- Block Supabase Data API access (app uses Express + direct Postgres connection only)
+ALTER TABLE church_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE fellowships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cells ENABLE ROW LEVEL SECURITY;
+ALTER TABLE departments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE member_departments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE attendance_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE attendance_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE attendance_guests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE event_rsvps ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE message_recipients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finances ENABLE ROW LEVEL SECURITY;
+ALTER TABLE prayer_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE follow_ups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE follow_up_notes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE announcements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE task_assignees ENABLE ROW LEVEL SECURITY;
+ALTER TABLE media_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cell_reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE activities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE password_reset_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;

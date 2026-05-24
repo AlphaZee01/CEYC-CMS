@@ -12,6 +12,8 @@ import { resolveUserPages, isDepartmentHead } from "./rbac.js";
 import { registerCompletionRoutes } from "./routes-complete.js";
 import { startJobs } from "./jobs.js";
 import { logAudit } from "./audit.js";
+import { formatCurrency } from "./currency.js";
+import { broadcastChatMessage } from "./realtime.js";
 import {
   canAccessFinances,
   canManageSettings,
@@ -19,7 +21,11 @@ import {
   canUploadMedia,
   scopeMemberFilter,
 } from "./rbac.js";
-import { seedDatabase } from "./seed.js";
+import { seedDatabase, ensureDashboardSamples, ensureNewcomerSampleData } from "./seed.js";
+import { ensureBirthdayData } from "./birthday-seed.js";
+import { canViewBirthdays, getBirthdaysForMonth } from "./birthdays.js";
+import { syncAuthUsers, createSupabaseAuthUser, updateSupabaseAuthPassword } from "./auth-sync.js";
+import { useSupabaseAuth } from "./supabase.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -33,10 +39,36 @@ if (!usePostgres) {
   initSchema();
 }
 await seedDatabase(false);
+await ensureDashboardSamples(getDb());
+try {
+  await ensureNewcomerSampleData(getDb());
+} catch (err) {
+  console.warn("Newcomer sample data skipped:", err.message);
+}
+try {
+  await ensureBirthdayData(getDb());
+} catch (err) {
+  console.warn("Birthday sample data skipped:", err.message);
+}
+if (useSupabaseAuth()) {
+  try {
+    await syncAuthUsers();
+  } catch (err) {
+    console.warn("Auth sync skipped:", err.message);
+  }
+  console.log("Supabase Auth enabled — data stored on Supabase Postgres.");
+}
 
 const app = express();
+if (process.env.NODE_ENV === "production") {
+  app.set("trust proxy", 1);
+}
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
+
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true, postgres: usePostgres });
+});
 
 const authLimiter = (await import("express-rate-limit")).default({
   windowMs: 15 * 60 * 1000,
@@ -73,11 +105,21 @@ async function loadMember(db, id) {
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
 app.post("/api/auth/login", async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: "Email and password required" });
-  const result = await loginUser(email, password);
-  if (!result) return res.status(401).json({ error: "Invalid credentials" });
-  res.json(result);
+  try {
+    if (useSupabaseAuth()) {
+      return res.status(400).json({
+        error: "Use Supabase Auth sign-in from the app. Legacy /api/auth/login is disabled when DATABASE_URL points to Supabase.",
+      });
+    }
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+    const result = await loginUser(email, password);
+    if (!result) return res.status(401).json({ error: "Invalid credentials" });
+    res.json(result);
+  } catch (err) {
+    console.error("Login error:", err);
+    res.status(500).json({ error: "Login failed" });
+  }
 });
 
 app.get("/api/auth/me", authMiddleware, async (req, res) => {
@@ -206,27 +248,40 @@ app.get("/api/members", authMiddleware, requirePage("members"), async (req, res)
 
 app.post("/api/members", authMiddleware, requirePage("members"), async (req, res) => {
   const db = getDb();
-  const { name, email, phone, role, cellId, fellowshipId, departmentIds = [], password } = req.body;
+  const { name, email, phone, role, cellId, fellowshipId, departmentIds = [], password, dateOfBirth } = req.body;
   if (!name || !email || !role) return res.status(400).json({ error: "Missing required fields" });
   const id = uid();
   const fel =
     fellowshipId ||
     (cellId ? await db.prepare("SELECT fellowship_id FROM cells WHERE id = ?").get(cellId)?.fellowship_id : null);
   await db.prepare(
-    `INSERT INTO members (id, name, email, phone, role, cell_id, fellowship_id, active, joined_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 1, date('now'))`
-  ).run(id, name, email, phone || "", role, cellId || null, fel || null);
+    `INSERT INTO members (id, name, email, phone, role, cell_id, fellowship_id, active, joined_at, date_of_birth)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1, date('now'), ?)`
+  ).run(id, name, email, phone || "", role, cellId || null, fel || null, dateOfBirth || null);
   const insMD = db.prepare("INSERT INTO member_departments (member_id, department_id) VALUES (?, ?)");
   for (const d of departmentIds) await insMD.run(id, d);
   if (password) {
-    const bcrypt = await import("bcryptjs");
-    const hash = await bcrypt.hash(password, 10);
-    await db.prepare("INSERT INTO users (id, email, password_hash, member_id) VALUES (?, ?, ?, ?)").run(
-      uid(),
-      email.toLowerCase(),
-      hash,
-      id
-    );
+    const userId = uid();
+    let authUserId = null;
+    let passwordHash = null;
+    if (useSupabaseAuth()) {
+      const auth = await createSupabaseAuthUser({
+        email: email.toLowerCase(),
+        password,
+        memberId: id,
+        name,
+        role,
+      });
+      authUserId = auth.authUserId;
+    } else {
+      const bcrypt = await import("bcryptjs");
+      passwordHash = await bcrypt.hash(password, 10);
+    }
+    await db
+      .prepare(
+        "INSERT INTO users (id, email, password_hash, auth_user_id, member_id) VALUES (?, ?, ?, ?, ?)"
+      )
+      .run(userId, email.toLowerCase(), passwordHash, authUserId, id);
   }
   await logActivity(db, `${name} added to member directory`, req.user.member.id);
   res.status(201).json(await loadMember(db, id));
@@ -234,7 +289,7 @@ app.post("/api/members", authMiddleware, requirePage("members"), async (req, res
 
 app.put("/api/members/:id", authMiddleware, requirePage("members"), async (req, res) => {
   const db = getDb();
-  const { name, email, phone, role, cellId, fellowshipId, departmentIds, active } = req.body;
+  const { name, email, phone, role, cellId, fellowshipId, departmentIds, active, dateOfBirth } = req.body;
   const fel =
     fellowshipId ??
     (cellId ? await db.prepare("SELECT fellowship_id FROM cells WHERE id = ?").get(cellId)?.fellowship_id : undefined);
@@ -267,6 +322,10 @@ app.put("/api/members/:id", authMiddleware, requirePage("members"), async (req, 
   if (active !== undefined) {
     sets.push("active = ?");
     params.push(active ? 1 : 0);
+  }
+  if (dateOfBirth !== undefined) {
+    sets.push("date_of_birth = ?");
+    params.push(dateOfBirth || null);
   }
   sets.push("updated_at = datetime('now')");
   params.push(req.params.id);
@@ -430,51 +489,74 @@ app.get("/api/attendance", authMiddleware, requirePage("attendance"), async (req
   const db = getDb();
   const records = await db.prepare("SELECT * FROM attendance_records ORDER BY date DESC").all();
   res.json(
-    records.map((r) => {
-      const members = db
-        .prepare("SELECT member_id, status FROM attendance_members WHERE record_id = ?")
-        .all(r.id);
-      return {
-        id: r.id,
-        date: r.date,
-        type: r.type,
-        cellId: r.cell_id,
-        fellowshipId: r.fellowship_id,
-        presentIds: members.filter((m) => m.status === "present").map((m) => m.member_id),
-        absentIds: members.filter((m) => m.status === "absent").map((m) => m.member_id),
-      };
-    })
+    await Promise.all(
+      records.map(async (r) => {
+        const members = await db
+          .prepare("SELECT member_id, status, is_newcomer FROM attendance_members WHERE record_id = ?")
+          .all(r.id);
+        const guests = await db
+          .prepare("SELECT id, name, contact FROM attendance_guests WHERE record_id = ?")
+          .all(r.id);
+        return {
+          id: r.id,
+          date: r.date,
+          type: r.type,
+          cellId: r.cell_id,
+          fellowshipId: r.fellowship_id,
+          presentIds: members.filter((m) => m.status === "present").map((m) => m.member_id),
+          absentIds: members.filter((m) => m.status === "absent").map((m) => m.member_id),
+          newcomerIds: members.filter((m) => m.status === "present" && m.is_newcomer).map((m) => m.member_id),
+          guests: guests.map((g) => ({ id: g.id, name: g.name, contact: g.contact })),
+        };
+      })
+    )
   );
 });
 
 app.post("/api/attendance", authMiddleware, requirePage("attendance"), async (req, res) => {
   const db = getDb();
-  const { date, type, cellId, fellowshipId, presentIds = [], absentIds = [] } = req.body;
+  const { date, type, cellId, fellowshipId, presentIds = [], absentIds = [], newcomerIds = [], guests = [] } = req.body;
+  const newcomerSet = new Set(newcomerIds);
   const id = uid();
   const fel = fellowshipId || (cellId ? await db.prepare("SELECT fellowship_id FROM cells WHERE id = ?").get(cellId)?.fellowship_id : null);
   await db.prepare(
     "INSERT INTO attendance_records (id, date, type, cell_id, fellowship_id, recorded_by) VALUES (?, ?, ?, ?, ?, ?)"
   ).run(id, date, type, cellId || null, fel, req.user.member.id);
-  for (const [rid, mid, st] of [
-    ...presentIds.map((mid) => [id, mid, "present"]),
-    ...absentIds.map((mid) => [id, mid, "absent"]),
-  ]) {
-    await db.prepare("INSERT INTO attendance_members (record_id, member_id, status) VALUES (?, ?, ?)").run(rid, mid, st);
+  for (const mid of presentIds) {
+    await db.prepare(
+      "INSERT INTO attendance_members (record_id, member_id, status, is_newcomer) VALUES (?, ?, 'present', ?)"
+    ).run(id, mid, newcomerSet.has(mid) ? 1 : 0);
+  }
+  for (const mid of absentIds) {
+    await db.prepare(
+      "INSERT INTO attendance_members (record_id, member_id, status, is_newcomer) VALUES (?, ?, 'absent', 0)"
+    ).run(id, mid);
+  }
+  for (const guest of guests) {
+    const name = typeof guest === "string" ? guest.trim() : guest?.name?.trim();
+    if (!name) continue;
+    const contact = typeof guest === "object" ? guest.contact?.trim() || null : null;
+    await db.prepare("INSERT INTO attendance_guests (id, record_id, name, contact) VALUES (?, ?, ?, ?)").run(
+      uid(),
+      id,
+      name,
+      contact
+    );
   }
   await logActivity(db, `Attendance recorded for ${date}`, req.user.member.id);
-  res.status(201).json({ id, date, type, cellId, fellowshipId: fel, presentIds, absentIds });
+  res.status(201).json({ id, date, type, cellId, fellowshipId: fel, presentIds, absentIds, newcomerIds, guests });
 });
 
-app.get("/api/attendance/trends", authMiddleware, requirePage("reports"), async (req, res) => {
+app.get("/api/attendance/trends", authMiddleware, requirePage("attendance"), async (req, res) => {
   const db = getDb();
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT ar.date, c.name as cell_name, SUM(CASE WHEN am.status = 'present' THEN 1 ELSE 0 END) as present_count
        FROM attendance_records ar
        JOIN attendance_members am ON am.record_id = ar.id
        LEFT JOIN cells c ON c.id = ar.cell_id
        WHERE ar.type = 'cell' AND ar.date >= date('now', '-60 days')
-       GROUP BY ar.date, ar.cell_id
+       GROUP BY ar.date, ar.cell_id, c.name
        ORDER BY ar.date`
     )
     .all();
@@ -485,23 +567,25 @@ app.get("/api/attendance/trends", authMiddleware, requirePage("reports"), async 
 
 app.get("/api/events", authMiddleware, requirePage("events"), async (req, res) => {
   const db = getDb();
+  const events = await db.prepare("SELECT * FROM events ORDER BY date").all();
   res.json(
-    db
-      .prepare("SELECT * FROM events ORDER BY date")
-      .all()
-      .map((e) => ({
-        id: e.id,
-        title: e.title,
-        date: e.date,
-        time: e.time,
-        location: e.location,
-        departmentId: e.department_id,
-        description: e.description,
-        rsvpIds: db
+    await Promise.all(
+      events.map(async (e) => {
+        const rsvps = await db
           .prepare("SELECT member_id FROM event_rsvps WHERE event_id = ?")
-          .all(e.id)
-          .map((r) => r.member_id),
-      }))
+          .all(e.id);
+        return {
+          id: e.id,
+          title: e.title,
+          date: e.date,
+          time: e.time,
+          location: e.location,
+          departmentId: e.department_id,
+          description: e.description,
+          rsvpIds: rsvps.map((r) => r.member_id),
+        };
+      })
+    )
   );
 });
 
@@ -529,7 +613,163 @@ app.post("/api/events/:id/rsvp", authMiddleware, requirePage("events"), async (r
   res.json({ rsvped: true });
 });
 
-// ─── Messages ──────────────────────────────────────────────────────────────────
+// ─── Messages (chat) ───────────────────────────────────────────────────────────
+
+app.get("/api/messages/conversations", authMiddleware, requirePage("communications"), async (req, res) => {
+  const db = getDb();
+  const mid = req.user.member.id;
+
+  const inbox = await db
+    .prepare(
+      `SELECT m.*, mr.read FROM messages m
+       JOIN message_recipients mr ON mr.message_id = m.id
+       WHERE mr.member_id = ?`
+    )
+    .all(mid);
+  const sent = await db.prepare("SELECT * FROM messages WHERE from_id = ?").all(mid);
+
+  const convos = new Map();
+
+  const upsert = (key, data) => {
+    const existing = convos.get(key);
+    if (!existing) {
+      convos.set(key, { ...data, unreadCount: data.unreadCount || 0 });
+      return;
+    }
+    const newer = new Date(data.lastAt) > new Date(existing.lastAt);
+    convos.set(key, {
+      id: data.id ?? existing.id,
+      type: data.type ?? existing.type,
+      partnerId: data.partnerId ?? existing.partnerId,
+      partnerName: data.partnerName ?? existing.partnerName,
+      lastMessage: newer ? data.lastMessage : existing.lastMessage,
+      lastAt: newer ? data.lastAt : existing.lastAt,
+      unreadCount: (existing.unreadCount || 0) + (data.unreadCount || 0),
+    });
+  };
+
+  for (const m of inbox) {
+    const preview = m.body?.slice(0, 80) || m.subject || "";
+    if (m.broadcast) {
+      upsert(`broadcast:${m.from_id}`, {
+        id: `broadcast:${m.from_id}`,
+        type: "broadcast",
+        partnerId: m.from_id,
+        partnerName: "Church Announcement",
+        lastMessage: preview,
+        lastAt: m.sent_at,
+        unreadCount: m.read ? 0 : 1,
+      });
+    } else {
+      upsert(m.from_id, {
+        id: m.from_id,
+        type: "direct",
+        partnerId: m.from_id,
+        partnerName: null,
+        lastMessage: preview,
+        lastAt: m.sent_at,
+        unreadCount: m.read ? 0 : 1,
+      });
+    }
+  }
+
+  for (const m of sent) {
+    if (m.broadcast) continue;
+    const recips = await db.prepare("SELECT member_id FROM message_recipients WHERE message_id = ?").all(m.id);
+    const preview = m.body?.slice(0, 80) || m.subject || "";
+    for (const r of recips) {
+      if (r.member_id === mid) continue;
+      upsert(r.member_id, {
+        id: r.member_id,
+        type: "direct",
+        partnerId: r.member_id,
+        partnerName: null,
+        lastMessage: preview,
+        lastAt: m.sent_at,
+        unreadCount: 0,
+      });
+    }
+  }
+
+  const memberRows = await db.prepare("SELECT id, name, role FROM members").all();
+  const memberMap = Object.fromEntries(memberRows.map((m) => [m.id, m]));
+
+  const list = [...convos.values()]
+    .map((c) => ({
+      ...c,
+      partnerName:
+        c.type === "broadcast"
+          ? memberMap[c.partnerId]?.name
+            ? `Broadcast · ${memberMap[c.partnerId].name}`
+            : "Church Announcement"
+          : memberMap[c.partnerId]?.name || "Unknown",
+      partnerRole: memberMap[c.partnerId]?.role,
+    }))
+    .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
+
+  res.json(list);
+});
+
+app.get("/api/messages/thread/:partnerId", authMiddleware, requirePage("communications"), async (req, res) => {
+  const db = getDb();
+  const mid = req.user.member.id;
+  const { partnerId } = req.params;
+
+  let rows;
+  if (partnerId === "__broadcast__") {
+    rows = await db
+      .prepare(
+        `SELECT m.* FROM messages m
+         WHERE m.broadcast = 1 AND (m.from_id = ? OR EXISTS (
+           SELECT 1 FROM message_recipients mr WHERE mr.message_id = m.id AND mr.member_id = ?
+         ))
+         ORDER BY m.sent_at ASC`
+      )
+      .all(mid, mid);
+  } else if (partnerId.startsWith("broadcast:")) {
+    const fromId = partnerId.slice("broadcast:".length);
+    rows = await db
+      .prepare(
+        `SELECT m.* FROM messages m
+         JOIN message_recipients mr ON mr.message_id = m.id
+         WHERE m.broadcast = 1 AND m.from_id = ? AND mr.member_id = ?
+         ORDER BY m.sent_at ASC`
+      )
+      .all(fromId, mid);
+  } else {
+    rows = await db
+      .prepare(
+        `SELECT DISTINCT m.* FROM messages m
+         LEFT JOIN message_recipients mr ON mr.message_id = m.id
+         WHERE m.broadcast = 0 AND (
+           (m.from_id = ? AND mr.member_id = ?) OR (m.from_id = ? AND mr.member_id = ?)
+         )
+         ORDER BY m.sent_at ASC`
+      )
+      .all(mid, partnerId, partnerId, mid);
+  }
+
+  const result = await Promise.all(
+    rows.map(async (m) => {
+      const recips = await db.prepare("SELECT member_id FROM message_recipients WHERE message_id = ?").all(m.id);
+      const readRow = await db
+        .prepare("SELECT read FROM message_recipients WHERE message_id = ? AND member_id = ?")
+        .get(m.id, mid);
+      return {
+        id: m.id,
+        fromId: m.from_id,
+        subject: m.subject,
+        body: m.body,
+        sentAt: m.sent_at,
+        broadcast: !!m.broadcast,
+        toIds: recips.map((r) => r.member_id),
+        read: m.from_id === mid ? true : !!readRow?.read,
+      };
+    })
+  );
+
+  res.json(result);
+});
 
 app.get("/api/messages", authMiddleware, requirePage("communications"), async (req, res) => {
   const db = getDb();
@@ -573,7 +813,8 @@ app.get("/api/messages", authMiddleware, requirePage("communications"), async (r
 
 app.post("/api/messages", authMiddleware, requirePage("communications"), async (req, res) => {
   const db = getDb();
-  const { subject, body, toIds, broadcast } = req.body;
+  const { subject = "", body, toIds, broadcast } = req.body;
+  if (!body?.trim()) return res.status(400).json({ error: "Message body required" });
   const sender = await db.prepare("SELECT * FROM members WHERE id = ?").get(req.user.member.id);
   let recipients = toIds || [];
   if (broadcast) {
@@ -590,17 +831,30 @@ app.post("/api/messages", authMiddleware, requirePage("communications"), async (
   await db.prepare("INSERT INTO messages (id, from_id, subject, body, broadcast) VALUES (?, ?, ?, ?, ?)").run(
     id,
     req.user.member.id,
-    subject,
-    body,
+    subject || "",
+    body.trim(),
     broadcast ? 1 : 0
   );
   for (const tid of recipients) {
     if (tid !== req.user.member.id) {
       await db.prepare("INSERT INTO message_recipients (message_id, member_id) VALUES (?, ?)").run(id, tid);
-      await notifyMember(db, tid, "New message", subject, "message");
+      await notifyMember(db, tid, "New message", body.trim().slice(0, 60), "message");
     }
   }
-  res.status(201).json({ id, subject, body, toIds: recipients, broadcast: !!broadcast });
+
+  const payload = {
+    id,
+    fromId: req.user.member.id,
+    subject: subject || "",
+    body: body.trim(),
+    sentAt: new Date().toISOString(),
+    broadcast: !!broadcast,
+    toIds: recipients,
+    read: false,
+  };
+  broadcastChatMessage(payload, recipients).catch(() => {});
+
+  res.status(201).json({ id, subject: subject || "", body: body.trim(), toIds: recipients, broadcast: !!broadcast });
 });
 
 app.patch("/api/messages/:id/read", authMiddleware, async (req, res) => {
@@ -614,33 +868,124 @@ app.patch("/api/messages/:id/read", authMiddleware, async (req, res) => {
 
 // ─── Finances ──────────────────────────────────────────────────────────────────
 
+function financeToJson(f, eventTitle = null, cellName = null) {
+  let purposeDisplay = f.purpose_label || null;
+  if (f.purpose_type === "event" && eventTitle) purposeDisplay = eventTitle;
+  if (f.purpose_type === "cell" && cellName) purposeDisplay = cellName;
+  if (f.purpose_type === "service" && f.purpose_label) purposeDisplay = f.purpose_label;
+  if (f.purpose_type === "service" && !purposeDisplay && f.purpose_id) {
+    purposeDisplay = `Service · ${f.purpose_id}`;
+  }
+  return {
+    id: f.id,
+    date: f.date,
+    type: f.type,
+    category: f.category,
+    amount: f.amount,
+    memberId: f.member_id,
+    description: f.description,
+    purposeType: f.purpose_type || null,
+    purposeId: f.purpose_id || null,
+    purposeLabel: f.purpose_label || null,
+    purposeDisplay: purposeDisplay || (f.purpose_type ? f.purpose_type : null),
+  };
+}
+
+app.get("/api/finances/expense-contexts", authMiddleware, async (req, res) => {
+  if (!canAccessFinances(req.user.member.role)) return res.status(403).json({ error: "Access denied" });
+  const db = getDb();
+  const [services, events, cells] = await Promise.all([
+    db
+      .prepare(
+        `SELECT id, date FROM attendance_records WHERE type = 'service' ORDER BY date DESC LIMIT 24`
+      )
+      .all(),
+    db.prepare("SELECT id, title, date FROM events ORDER BY date DESC LIMIT 24").all(),
+    db.prepare("SELECT id, name FROM cells ORDER BY name").all(),
+  ]);
+  res.json({
+    services: services.map((s) => ({
+      id: s.id,
+      date: s.date,
+      label: `Sunday Service · ${s.date}`,
+    })),
+    events: events.map((e) => ({
+      id: e.id,
+      title: e.title,
+      date: e.date,
+      label: `${e.title} · ${e.date}`,
+    })),
+    cells: cells.map((c) => ({ id: c.id, name: c.name, label: c.name })),
+  });
+});
+
 app.get("/api/finances", authMiddleware, async (req, res) => {
   if (!canAccessFinances(req.user.member.role)) return res.status(403).json({ error: "Access denied" });
   const db = getDb();
+  const rows = await db.prepare("SELECT * FROM finances ORDER BY date DESC").all();
+  const eventIds = [...new Set(rows.filter((r) => r.purpose_type === "event" && r.purpose_id).map((r) => r.purpose_id))];
+  const cellIds = [...new Set(rows.filter((r) => r.purpose_type === "cell" && r.purpose_id).map((r) => r.purpose_id))];
+  const eventMap = {};
+  const cellMap = {};
+  if (eventIds.length) {
+    for (const e of await db.prepare(`SELECT id, title FROM events WHERE id IN (${eventIds.map(() => "?").join(",")})`).all(...eventIds)) {
+      eventMap[e.id] = e.title;
+    }
+  }
+  if (cellIds.length) {
+    for (const c of await db.prepare(`SELECT id, name FROM cells WHERE id IN (${cellIds.map(() => "?").join(",")})`).all(...cellIds)) {
+      cellMap[c.id] = c.name;
+    }
+  }
   res.json(
-    (await db.prepare("SELECT * FROM finances ORDER BY date DESC").all()).map((f) => ({
-      id: f.id,
-      date: f.date,
-      type: f.type,
-      category: f.category,
-      amount: f.amount,
-      memberId: f.member_id,
-      description: f.description,
-    }))
+    rows.map((f) =>
+      financeToJson(
+        f,
+        f.purpose_type === "event" ? eventMap[f.purpose_id] : null,
+        f.purpose_type === "cell" ? cellMap[f.purpose_id] : null
+      )
+    )
   );
 });
 
 app.post("/api/finances", authMiddleware, async (req, res) => {
   if (!canAccessFinances(req.user.member.role)) return res.status(403).json({ error: "Access denied" });
   const db = getDb();
-  const { date, type, category, amount, memberId, description } = req.body;
+  const { date, type, category, amount, memberId, description, purposeType, purposeId, purposeLabel } = req.body;
   const id = uid();
   await db.prepare(
-    `INSERT INTO finances (id, date, type, category, amount, member_id, description, recorded_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, date, type, category, amount, memberId || null, description, req.user.member.id);
-  await logActivity(db, `${type} recorded: ₦${amount}`, req.user.member.id);
-  res.status(201).json({ id, date, type, category, amount, memberId, description });
+    `INSERT INTO finances (id, date, type, category, amount, member_id, description, purpose_type, purpose_id, purpose_label, recorded_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    date,
+    type,
+    category,
+    amount,
+    memberId || null,
+    description || null,
+    purposeType || null,
+    purposeId || null,
+    purposeLabel || null,
+    req.user.member.id
+  );
+  await logActivity(
+    db,
+    `${type} recorded: ${formatCurrency(amount)}${purposeLabel ? ` (${purposeLabel})` : ""}`,
+    req.user.member.id
+  );
+  res.status(201).json({
+    id,
+    date,
+    type,
+    category,
+    amount,
+    memberId,
+    description,
+    purposeType: purposeType || null,
+    purposeId: purposeId || null,
+    purposeLabel: purposeLabel || null,
+  });
 });
 
 // ─── Prayer ────────────────────────────────────────────────────────────────────
@@ -652,7 +997,7 @@ app.get("/api/prayers", authMiddleware, requirePage("prayer"), async (req, res) 
   if (["Senior Pastor", "Associate Pastor", "Admin"].includes(role) || role.includes("Leader")) {
     rows = await db.prepare("SELECT * FROM prayer_requests ORDER BY created_at DESC").all();
   } else {
-    rows = db
+    rows = await db
       .prepare("SELECT * FROM prayer_requests WHERE member_id = ? OR is_private = 0 ORDER BY created_at DESC")
       .all(req.user.member.id);
   }
@@ -697,17 +1042,19 @@ app.get("/api/follow-ups", authMiddleware, requirePage("discipleship"), async (r
   const db = getDb();
   const rows = await db.prepare("SELECT * FROM follow_ups ORDER BY created_at DESC").all();
   res.json(
-    rows.map((fu) => ({
-      id: fu.id,
-      name: fu.name,
-      contact: fu.contact,
-      stage: fu.stage,
-      assignedToId: fu.assigned_to_id,
-      createdAt: fu.created_at,
-      notes: db
-        .prepare("SELECT date, text, outcome FROM follow_up_notes WHERE follow_up_id = ? ORDER BY date")
-        .all(fu.id),
-    }))
+    await Promise.all(
+      rows.map(async (fu) => ({
+        id: fu.id,
+        name: fu.name,
+        contact: fu.contact,
+        stage: fu.stage,
+        assignedToId: fu.assigned_to_id,
+        createdAt: fu.created_at,
+        notes: await db
+          .prepare("SELECT date, text, outcome FROM follow_up_notes WHERE follow_up_id = ? ORDER BY date")
+          .all(fu.id),
+      }))
+    )
   );
 });
 
@@ -967,7 +1314,7 @@ app.get("/api/reports/analytics", authMiddleware, requirePage("reports"), async 
       `SELECT d.name, COUNT(md.member_id) + CASE WHEN d.head_id IS NOT NULL THEN 1 ELSE 0 END as value
        FROM departments d
        LEFT JOIN member_departments md ON md.department_id = d.id
-       GROUP BY d.id`
+       GROUP BY d.id, d.name, d.head_id`
     )
     .all();
   res.json({ memberGrowth: growth, departmentParticipation: dept });
@@ -1108,19 +1455,36 @@ app.get("/api/users", authMiddleware, async (req, res) => {
 
 app.post("/api/users", authMiddleware, async (req, res) => {
   if (!canManageSettings(req.user.member.role)) return res.status(403).json({ error: "Access denied" });
-  const bcrypt = await import("bcryptjs");
   const db = getDb();
   const { email, password, memberId, accessLevel } = req.body;
-  const hash = await bcrypt.hash(password, 10);
+  if (!email || !password || !memberId) return res.status(400).json({ error: "Email, password, and member required" });
+
+  const member = await db.prepare("SELECT name, role FROM members WHERE id = ?").get(memberId);
+  if (!member) return res.status(404).json({ error: "Member not found" });
+
   const id = uid();
-  await db.prepare("INSERT INTO users (id, email, password_hash, member_id, access_level) VALUES (?, ?, ?, ?, ?)").run(
-    id,
-    email.toLowerCase(),
-    hash,
-    memberId,
-    accessLevel || "standard"
-  );
-  res.status(201).json({ id, email, memberId, accessLevel });
+  let authUserId = null;
+  let passwordHash = null;
+  if (useSupabaseAuth()) {
+    const auth = await createSupabaseAuthUser({
+      email: email.toLowerCase(),
+      password,
+      memberId,
+      name: member.name,
+      role: member.role,
+    });
+    authUserId = auth.authUserId;
+  } else {
+    const bcrypt = await import("bcryptjs");
+    passwordHash = await bcrypt.hash(password, 10);
+  }
+
+  await db
+    .prepare(
+      "INSERT INTO users (id, email, password_hash, auth_user_id, member_id, access_level) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    .run(id, email.toLowerCase(), passwordHash, authUserId, memberId, accessLevel || "standard");
+  res.status(201).json({ id, email, memberId, accessLevel: accessLevel || "standard" });
 });
 
 // ─── Activities & Notifications ────────────────────────────────────────────────
@@ -1155,6 +1519,279 @@ app.patch("/api/notifications/read-all", authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/api/dashboard/overview", authMiddleware, requirePage("dashboard"), async (req, res) => {
+  const db = getDb();
+  const role = req.user.member.role;
+  const pastoral = ["Senior Pastor", "Associate Pastor"].includes(role);
+  const showBirthdays = canViewBirthdays(role);
+  const showFinances = canAccessFinances(role) || role === "Associate Pastor";
+
+  const now = new Date();
+  const monthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+  async function serviceAttendance(limit = 8) {
+    const rows = await db
+      .prepare(
+        `SELECT ar.id, ar.date,
+          SUM(CASE WHEN am.status = 'present' THEN 1 ELSE 0 END) as present,
+          SUM(CASE WHEN am.status = 'absent' THEN 1 ELSE 0 END) as absent
+         FROM attendance_records ar
+         JOIN attendance_members am ON am.record_id = ar.id
+         WHERE ar.type = 'service'
+         GROUP BY ar.id, ar.date
+         ORDER BY ar.date DESC
+         LIMIT ?`
+      )
+      .all(limit);
+    return rows.map((r) => ({
+      id: r.id,
+      date: r.date,
+      present: Number(r.present ?? 0),
+      absent: Number(r.absent ?? 0),
+      total: Number(r.present ?? 0) + Number(r.absent ?? 0),
+      rate: Number(r.present ?? 0) + Number(r.absent ?? 0)
+        ? Math.round((Number(r.present ?? 0) / (Number(r.present ?? 0) + Number(r.absent ?? 0))) * 100)
+        : 0,
+    }));
+  }
+
+  async function getServiceNewcomers(recordId) {
+    if (!recordId) return { members: [], guests: [], total: 0 };
+    const [memberRows, guestRows] = await Promise.all([
+      db
+        .prepare(
+          `SELECT m.id, m.name, m.role, m.phone, m.joined_at
+           FROM attendance_members am
+           JOIN members m ON m.id = am.member_id
+           WHERE am.record_id = ? AND am.status = 'present' AND am.is_newcomer = 1`
+        )
+        .all(recordId),
+      db.prepare("SELECT name, contact FROM attendance_guests WHERE record_id = ? ORDER BY name").all(recordId),
+    ]);
+    const members = memberRows.map((m) => ({
+      id: m.id,
+      name: m.name,
+      role: m.role,
+      phone: m.phone,
+      joinedAt: m.joined_at,
+    }));
+    const guests = guestRows.map((g) => ({ name: g.name, contact: g.contact }));
+    return { members, guests, total: members.length + guests.length };
+  }
+
+  const [
+    m,
+    c,
+    f,
+    d,
+    newMembers,
+    pendingPrayers,
+    prayedPrayers,
+    answeredPrayers,
+    pendingTasks,
+    overdueTasks,
+    pendingReports,
+    activeFollowUps,
+    serviceHistory,
+    cellRows,
+    followUpStages,
+    tasksDue,
+    reportsPending,
+    announcements,
+    nextEventRow,
+  ] = await Promise.all([
+    db.prepare("SELECT COUNT(*) as c FROM members WHERE active = 1").get(),
+    db.prepare("SELECT COUNT(*) as c FROM cells").get(),
+    db.prepare("SELECT COUNT(*) as c FROM fellowships").get(),
+    db.prepare("SELECT COUNT(*) as c FROM departments").get(),
+    db.prepare("SELECT COUNT(*) as c FROM members WHERE active = 1 AND joined_at LIKE ?").get(`${monthPrefix}%`),
+    db.prepare("SELECT COUNT(*) as c FROM prayer_requests WHERE status = 'pending'").get(),
+    db.prepare("SELECT COUNT(*) as c FROM prayer_requests WHERE status = 'prayed'").get(),
+    db.prepare("SELECT COUNT(*) as c FROM prayer_requests WHERE status = 'answered'").get(),
+    db.prepare("SELECT COUNT(*) as c FROM tasks WHERE status != 'completed'").get(),
+    db.prepare("SELECT COUNT(*) as c FROM tasks WHERE status != 'completed' AND due_date < date('now')").get(),
+    db.prepare("SELECT COUNT(*) as c FROM cell_reports WHERE status = 'submitted'").get(),
+    db.prepare("SELECT COUNT(*) as c FROM follow_ups").get(),
+    serviceAttendance(8),
+    db
+      .prepare(
+        `SELECT ar.date, c.name as cell_name, fel.name as fellowship_name,
+          SUM(CASE WHEN am.status = 'present' THEN 1 ELSE 0 END) as present
+         FROM attendance_records ar
+         JOIN attendance_members am ON am.record_id = ar.id
+         LEFT JOIN cells c ON c.id = ar.cell_id
+         LEFT JOIN fellowships fel ON fel.id = ar.fellowship_id
+         WHERE ar.type = 'cell' AND ar.date >= date('now', '-30 days')
+         GROUP BY ar.id, ar.date, c.name, fel.name
+         ORDER BY ar.date DESC`
+      )
+      .all(),
+    db.prepare("SELECT stage, COUNT(*) as c FROM follow_ups GROUP BY stage").all(),
+    pastoral
+      ? db.prepare("SELECT id, title, due_date, priority, status FROM tasks WHERE status != 'completed' ORDER BY due_date LIMIT 5").all()
+      : Promise.resolve([]),
+    pastoral
+      ? db
+          .prepare(
+            `SELECT cr.id, cr.type, cr.period, cr.status, cr.attendance_count, cr.new_visitors, m.name as submitter_name
+             FROM cell_reports cr
+             JOIN members m ON m.id = cr.submitter_id
+             WHERE cr.status = 'submitted'
+             ORDER BY cr.submitted_at DESC
+             LIMIT 5`
+          )
+          .all()
+      : Promise.resolve([]),
+    db
+      .prepare("SELECT id, title, pinned FROM announcements WHERE expires_at >= date('now') ORDER BY pinned DESC, created_at DESC LIMIT 3")
+      .all(),
+    db.prepare("SELECT * FROM events WHERE date >= date('now') ORDER BY date LIMIT 1").get(),
+  ]);
+
+  const lastService = serviceHistory[0] || null;
+  const previousService = serviceHistory[1] || null;
+  const lastServiceNewcomers = await getServiceNewcomers(lastService?.id);
+  const attendanceDelta =
+    lastService && previousService ? lastService.present - previousService.present : null;
+
+  let lastOffering = null;
+  let monthFinances = null;
+  if (showFinances && lastService) {
+    const offeringRows = await db
+      .prepare(
+        `SELECT category, SUM(amount) as total FROM finances
+         WHERE date = ? AND type = 'income' AND category IN ('Offering', 'Tithe', 'Seed')
+         GROUP BY category`
+      )
+      .all(lastService.date);
+    const byCat = Object.fromEntries(offeringRows.map((r) => [r.category, Number(r.total ?? 0)]));
+    const tithe = byCat.Tithe || 0;
+    const offering = byCat.Offering || 0;
+    const seed = byCat.Seed || 0;
+    lastOffering = { date: lastService.date, tithe, offering, seed, total: tithe + offering + seed };
+
+    const monthRows = await db
+      .prepare(`SELECT type, category, SUM(amount) as total FROM finances WHERE date LIKE ? GROUP BY type, category`)
+      .all(`${monthPrefix}%`);
+    let income = 0;
+    let expense = 0;
+    let offeringTotal = 0;
+    let titheTotal = 0;
+    for (const r of monthRows) {
+      const amt = Number(r.total ?? 0);
+      if (r.type === "income") {
+        income += amt;
+        if (r.category === "Offering") offeringTotal += amt;
+        if (r.category === "Tithe") titheTotal += amt;
+      } else expense += amt;
+    }
+    monthFinances = { income, expense, net: income - expense, offeringTotal, titheTotal };
+  }
+
+  const cellPresent = cellRows.map((r) => Number(r.present ?? 0));
+  const avgCellAttendance = cellPresent.length
+    ? Math.round(cellPresent.reduce((a, b) => a + b, 0) / cellPresent.length)
+    : 0;
+  const topCellRow = cellRows.reduce(
+    (best, r) => (Number(r.present ?? 0) > Number(best?.present ?? 0) ? r : best),
+    cellRows[0] || null
+  );
+
+  let nextEvent = null;
+  if (nextEventRow) {
+    const rsvps = await db.prepare("SELECT COUNT(*) as c FROM event_rsvps WHERE event_id = ?").get(nextEventRow.id);
+    nextEvent = {
+      id: nextEventRow.id,
+      title: nextEventRow.title,
+      date: nextEventRow.date,
+      time: nextEventRow.time,
+      location: nextEventRow.location,
+      rsvpCount: Number(rsvps?.c ?? 0),
+    };
+  }
+
+  const fellowshipTotals = {};
+  for (const r of cellRows) {
+    const name = r.fellowship_name || "Unknown";
+    fellowshipTotals[name] = (fellowshipTotals[name] || 0) + Number(r.present ?? 0);
+  }
+  const fellowshipCellAttendance = Object.entries(fellowshipTotals)
+    .map(([name, present]) => ({ name, present }))
+    .sort((a, b) => b.present - a.present);
+
+  const birthdaysThisMonth = showBirthdays
+    ? await getBirthdaysForMonth(db, now.getFullYear(), now.getMonth() + 1)
+    : null;
+
+  res.json({
+    pastoral,
+    showFinances,
+    counts: {
+      members: Number(m?.c ?? 0),
+      cells: Number(c?.c ?? 0),
+      fellowships: Number(f?.c ?? 0),
+      departments: Number(d?.c ?? 0),
+      newMembersThisMonth: Number(newMembers?.c ?? 0),
+      pendingPrayers: Number(pendingPrayers?.c ?? 0),
+      pendingTasks: Number(pendingTasks?.c ?? 0),
+      overdueTasks: Number(overdueTasks?.c ?? 0),
+      pendingReports: Number(pendingReports?.c ?? 0),
+      activeFollowUps: Number(activeFollowUps?.c ?? 0),
+    },
+    lastService,
+    previousService,
+    lastServiceNewcomers,
+    attendanceDelta,
+    lastOffering,
+    monthFinances,
+    cellHealth: {
+      avgAttendance: avgCellAttendance,
+      meetingsThisMonth: cellRows.length,
+      topCell: topCellRow
+        ? { name: topCellRow.cell_name, present: Number(topCellRow.present ?? 0), date: topCellRow.date }
+        : null,
+    },
+    serviceTrend: [...serviceHistory].reverse(),
+    fellowshipCellAttendance,
+    prayersSummary: {
+      pending: Number(pendingPrayers?.c ?? 0),
+      prayed: Number(prayedPrayers?.c ?? 0),
+      answered: Number(answeredPrayers?.c ?? 0),
+    },
+    tasksDue: tasksDue.map((t) => ({
+      id: t.id,
+      title: t.title,
+      dueDate: t.due_date,
+      priority: t.priority,
+      status: t.status,
+    })),
+    pendingReports: reportsPending.map((r) => ({
+      id: r.id,
+      type: r.type,
+      period: r.period,
+      submitterName: r.submitter_name,
+      attendanceCount: r.attendance_count,
+      newVisitors: r.new_visitors,
+      status: r.status,
+    })),
+    followUpsByStage: followUpStages.map((s) => ({ stage: s.stage, count: Number(s.c ?? 0) })),
+    nextEvent,
+    announcements: announcements.map((a) => ({ id: a.id, title: a.title, pinned: !!a.pinned })),
+    birthdaysThisMonth,
+  });
+});
+
+app.get("/api/dashboard/birthdays", authMiddleware, requirePage("dashboard"), async (req, res) => {
+  if (!canViewBirthdays(req.user.member.role)) {
+    return res.status(403).json({ error: "Access denied" });
+  }
+  const year = req.query.year || new Date().getFullYear();
+  const month = req.query.month || new Date().getMonth() + 1;
+  const data = await getBirthdaysForMonth(getDb(), year, month);
+  if (!data) return res.status(400).json({ error: "Invalid month" });
+  res.json(data);
+});
+
 app.get("/api/dashboard/stats", authMiddleware, requirePage("dashboard"), async (req, res) => {
   const db = getDb();
   const [m, c, f, d] = await Promise.all([
@@ -1187,4 +1824,13 @@ if (fs.existsSync(distPath)) {
 
 app.listen(PORT, () => {
   console.log(`Christ Embassy API running on http://localhost:${PORT}`);
+}).on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `Port ${PORT} is already in use. Stop the other API process (or run: npx kill-port ${PORT}) and restart.`
+    );
+  } else {
+    console.error("API server failed to start:", err.message);
+  }
+  process.exit(1);
 });

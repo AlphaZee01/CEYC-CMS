@@ -34,6 +34,7 @@ function adaptSql(sql) {
     .replace(/\bused\s*=\s*0\b/gi, "used IS FALSE")
     .replace(/\bbroadcast\s*=\s*1\b/gi, "broadcast IS TRUE")
     .replace(/\bpinned\s*=\s*1\b/gi, "pinned IS TRUE")
+    .replace(/\bis_newcomer\s*=\s*1\b/gi, "is_newcomer = TRUE")
     .replace(/strftime\('%Y-%m', joined_at\)/gi, "to_char(joined_at::date, 'YYYY-MM')");
 }
 
@@ -47,6 +48,21 @@ export async function initDatabase() {
     try {
       const schema = fs.readFileSync(path.join(__dirname, "schema.postgres.sql"), "utf8");
       await client.query(schema);
+      await client.query(`
+        ALTER TABLE attendance_members ADD COLUMN IF NOT EXISTS is_newcomer BOOLEAN DEFAULT FALSE;
+        ALTER TABLE members ADD COLUMN IF NOT EXISTS date_of_birth TEXT;
+        CREATE TABLE IF NOT EXISTS attendance_guests (
+          id TEXT PRIMARY KEY,
+          record_id TEXT NOT NULL REFERENCES attendance_records(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          contact TEXT
+        );
+        ALTER TABLE finances ADD COLUMN IF NOT EXISTS purpose_type TEXT;
+        ALTER TABLE finances ADD COLUMN IF NOT EXISTS purpose_id TEXT;
+        ALTER TABLE finances ADD COLUMN IF NOT EXISTS purpose_label TEXT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_user_id UUID UNIQUE;
+        ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+      `);
     } finally {
       client.release();
     }

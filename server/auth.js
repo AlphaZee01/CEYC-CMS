@@ -4,6 +4,8 @@ import { getDb } from "./store.js";
 import { memberToJson } from "./db.js";
 import { sendPasswordResetEmail, isEmailConfigured } from "./email.js";
 import { canAccessPage, resolveUserPages } from "./rbac.js";
+import { useSupabaseAuth, verifySupabaseAccessToken } from "./supabase.js";
+import { updateSupabaseAuthPassword } from "./auth-sync.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "celcm-production-secret-change-in-env";
 const JWT_EXPIRES = "7d";
@@ -16,43 +18,91 @@ export function verifyToken(token) {
   return jwt.verify(token, JWT_SECRET);
 }
 
+async function loadUserContext(db, userRow) {
+  const deptRows = await db
+    .prepare("SELECT department_id FROM member_departments WHERE member_id = ?")
+    .all(userRow.member_id);
+  return {
+    userId: userRow.id,
+    email: userRow.email,
+    accessLevel: userRow.access_level,
+    authUserId: userRow.auth_user_id || null,
+    member: memberToJson(
+      {
+        id: userRow.member_id,
+        name: userRow.name,
+        email: userRow.member_email || userRow.email,
+        phone: userRow.phone,
+        role: userRow.role,
+        cell_id: userRow.cell_id,
+        fellowship_id: userRow.fellowship_id,
+        active: userRow.active,
+        joined_at: userRow.joined_at,
+      },
+      deptRows.map((r) => r.department_id)
+    ),
+  };
+}
+
+async function resolveUserFromSupabaseToken(db, accessToken) {
+  const { user: authUser, error } = await verifySupabaseAccessToken(accessToken);
+  if (error || !authUser) return null;
+
+  let row = await db
+    .prepare(
+      `SELECT u.*, m.id as mid, m.name, m.email as member_email, m.phone, m.role, m.cell_id, m.fellowship_id, m.active, m.joined_at
+       FROM users u JOIN members m ON u.member_id = m.id
+       WHERE u.auth_user_id = ? AND m.active = 1`
+    )
+    .get(authUser.id);
+
+  if (!row && authUser.email) {
+    row = await db
+      .prepare(
+        `SELECT u.*, m.id as mid, m.name, m.email as member_email, m.phone, m.role, m.cell_id, m.fellowship_id, m.active, m.joined_at
+         FROM users u JOIN members m ON u.member_id = m.id
+         WHERE LOWER(u.email) = LOWER(?) AND m.active = 1`
+      )
+      .get(authUser.email);
+    if (row) {
+      await db.prepare("UPDATE users SET auth_user_id = ? WHERE id = ?").run(authUser.id, row.id);
+      row.auth_user_id = authUser.id;
+    }
+  }
+
+  if (!row) return null;
+  return loadUserContext(db, row);
+}
+
+async function resolveUserFromLegacyToken(db, decoded) {
+  const user = await db
+    .prepare(
+      `SELECT u.*, m.id as mid, m.name, m.email as member_email, m.phone, m.role, m.cell_id, m.fellowship_id, m.active, m.joined_at
+       FROM users u JOIN members m ON u.member_id = m.id WHERE u.id = ? AND m.active = 1`
+    )
+    .get(decoded.userId);
+  if (!user) return null;
+  return loadUserContext(db, user);
+}
+
 export async function authMiddleware(req, res, next) {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) {
     return res.status(401).json({ error: "Authentication required" });
   }
+
+  const token = header.slice(7);
+  const db = getDb();
+
   try {
-    const decoded = verifyToken(header.slice(7));
-    const db = getDb();
-    const user = await db
-      .prepare(
-        `SELECT u.*, m.id as mid, m.name, m.email as member_email, m.phone, m.role, m.cell_id, m.fellowship_id, m.active, m.joined_at
-         FROM users u JOIN members m ON u.member_id = m.id WHERE u.id = ? AND m.active = 1`
-      )
-      .get(decoded.userId);
-    if (!user) return res.status(401).json({ error: "Invalid session" });
-    const deptRows = await db
-      .prepare("SELECT department_id FROM member_departments WHERE member_id = ?")
-      .all(user.member_id);
-    req.user = {
-      userId: user.id,
-      email: user.email,
-      accessLevel: user.access_level,
-      member: memberToJson(
-        {
-          id: user.member_id,
-          name: user.name,
-          email: user.member_email,
-          phone: user.phone,
-          role: user.role,
-          cell_id: user.cell_id,
-          fellowship_id: user.fellowship_id,
-          active: user.active,
-          joined_at: user.joined_at,
-        },
-        deptRows.map((r) => r.department_id)
-      ),
-    };
+    if (useSupabaseAuth()) {
+      req.user = await resolveUserFromSupabaseToken(db, token);
+      if (!req.user) return res.status(401).json({ error: "Invalid session" });
+    } else {
+      const decoded = verifyToken(token);
+      req.user = await resolveUserFromLegacyToken(db, decoded);
+      if (!req.user) return res.status(401).json({ error: "Invalid session" });
+    }
     next();
   } catch {
     return res.status(401).json({ error: "Invalid or expired token" });
@@ -68,11 +118,25 @@ export function requirePage(page) {
   };
 }
 
-export async function changePassword(userId, currentPassword, newPassword) {
+export async function changePassword(userId, currentPassword, newPassword, authUserId = null) {
+  if (useSupabaseAuth() && authUserId) {
+    const { getSupabaseAuthClient } = await import("./supabase.js");
+    const client = getSupabaseAuthClient();
+    const user = await getDb().prepare("SELECT email FROM users WHERE id = ?").get(userId);
+    if (!user) return { error: "User not found" };
+    const { error: signInError } = await client.auth.signInWithPassword({
+      email: user.email,
+      password: currentPassword,
+    });
+    if (signInError) return { error: "Current password is incorrect" };
+    await updateSupabaseAuthPassword(authUserId, newPassword);
+    return { ok: true };
+  }
+
   const db = getDb();
   const user = await db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
   if (!user) return { error: "User not found" };
-  const ok = await bcrypt.compare(currentPassword, user.password_hash);
+  const ok = await bcrypt.compare(currentPassword, user.password_hash || "");
   if (!ok) return { error: "Current password is incorrect" };
   const hash = await bcrypt.hash(newPassword, 10);
   await db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hash, userId);
@@ -80,6 +144,14 @@ export async function changePassword(userId, currentPassword, newPassword) {
 }
 
 export async function createPasswordReset(email) {
+  if (useSupabaseAuth()) {
+    return {
+      ok: true,
+      useSupabase: true,
+      message: "Use Supabase password reset from the login page.",
+    };
+  }
+
   const db = getDb();
   const user = await db
     .prepare("SELECT u.id, u.email FROM users u JOIN members m ON m.id = u.member_id WHERE u.email = ? AND m.active = 1")
@@ -108,6 +180,10 @@ export async function createPasswordReset(email) {
 }
 
 export async function resetPasswordWithToken(token, newPassword) {
+  if (useSupabaseAuth()) {
+    return { error: "Use Supabase password recovery flow" };
+  }
+
   const db = getDb();
   const row = await db
     .prepare(
@@ -122,6 +198,10 @@ export async function resetPasswordWithToken(token, newPassword) {
 }
 
 export async function loginUser(email, password) {
+  if (useSupabaseAuth()) {
+    return null;
+  }
+
   const db = getDb();
   const row = await db
     .prepare(
@@ -130,7 +210,7 @@ export async function loginUser(email, password) {
     )
     .get(email.toLowerCase());
   if (!row || !row.active) return null;
-  const ok = await bcrypt.compare(password, row.password_hash);
+  const ok = await bcrypt.compare(password, row.password_hash || "");
   if (!ok) return null;
   const deptRows = await db
     .prepare("SELECT department_id FROM member_departments WHERE member_id = ?")

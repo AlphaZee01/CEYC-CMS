@@ -1,5 +1,11 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 import { api, authApi, setToken } from "@/lib/api";
+import {
+  supabase,
+  supabaseConfigured,
+  signInWithEmail,
+  signOutSupabase,
+} from "@/lib/supabase";
 import type { AuthUser, PageId } from "@/types/church";
 
 interface AuthState {
@@ -27,16 +33,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
       setPages([]);
       setToken(null);
+      if (supabaseConfigured) await signOutSupabase();
     }
   }, []);
 
   useEffect(() => {
-    const token = localStorage.getItem("celcm_token");
-    if (token) refresh().finally(() => setLoading(false));
-    else setLoading(false);
+    let mounted = true;
+
+    const init = async () => {
+      try {
+        if (supabaseConfigured && supabase) {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session && mounted) await refresh();
+
+          const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+            if (!mounted) return;
+            if (session && event !== "PASSWORD_RECOVERY") await refresh();
+            if (!session) {
+              setUser(null);
+              setPages([]);
+            }
+          });
+          return () => subscription.unsubscribe();
+        }
+
+        const token = localStorage.getItem("celcm_token");
+        if (token && mounted) await refresh();
+      } finally {
+        if (mounted) setLoading(false);
+      }
+      return undefined;
+    };
+
+    const unsubPromise = init();
+    return () => {
+      mounted = false;
+      unsubPromise.then((unsub) => unsub?.());
+    };
   }, [refresh]);
 
   const login = async (email: string, password: string) => {
+    if (supabaseConfigured) {
+      await signInWithEmail(email, password);
+      await refresh();
+      return;
+    }
     const { token, user: u } = await authApi.login(email, password);
     setToken(token);
     setUser(u as AuthUser);
@@ -44,7 +85,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setPages(me.pages as PageId[]);
   };
 
-  const logout = () => {
+  const logout = async () => {
+    if (supabaseConfigured) await signOutSupabase();
     setToken(null);
     setUser(null);
     setPages([]);

@@ -57,7 +57,8 @@ export function initSchema() {
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
+      password_hash TEXT,
+      auth_user_id TEXT UNIQUE,
       member_id TEXT NOT NULL UNIQUE REFERENCES members(id) ON DELETE CASCADE,
       access_level TEXT DEFAULT 'standard',
       created_at TEXT DEFAULT (datetime('now'))
@@ -103,7 +104,15 @@ export function initSchema() {
       record_id TEXT NOT NULL REFERENCES attendance_records(id) ON DELETE CASCADE,
       member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
       status TEXT NOT NULL CHECK (status IN ('present', 'absent')),
+      is_newcomer INTEGER DEFAULT 0,
       PRIMARY KEY (record_id, member_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS attendance_guests (
+      id TEXT PRIMARY KEY,
+      record_id TEXT NOT NULL REFERENCES attendance_records(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      contact TEXT
     );
 
     CREATE TABLE IF NOT EXISTS events (
@@ -149,6 +158,9 @@ export function initSchema() {
       amount REAL NOT NULL,
       member_id TEXT REFERENCES members(id) ON DELETE SET NULL,
       description TEXT,
+      purpose_type TEXT CHECK (purpose_type IN ('service', 'event', 'cell', 'outreach', 'general', 'other')),
+      purpose_id TEXT,
+      purpose_label TEXT,
       recorded_by TEXT REFERENCES members(id),
       created_at TEXT DEFAULT (datetime('now'))
     );
@@ -299,6 +311,35 @@ function migrateColumns(db) {
   if (!cols.includes("welfare_notes")) {
     db.exec("ALTER TABLE members ADD COLUMN welfare_notes TEXT");
   }
+  if (!cols.includes("date_of_birth")) {
+    db.exec("ALTER TABLE members ADD COLUMN date_of_birth TEXT");
+  }
+  const amCols = db.prepare("PRAGMA table_info(attendance_members)").all().map((c) => c.name);
+  if (!amCols.includes("is_newcomer")) {
+    db.exec("ALTER TABLE attendance_members ADD COLUMN is_newcomer INTEGER DEFAULT 0");
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS attendance_guests (
+      id TEXT PRIMARY KEY,
+      record_id TEXT NOT NULL REFERENCES attendance_records(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      contact TEXT
+    );
+  `);
+  const finCols = db.prepare("PRAGMA table_info(finances)").all().map((c) => c.name);
+  if (!finCols.includes("purpose_type")) {
+    db.exec("ALTER TABLE finances ADD COLUMN purpose_type TEXT");
+  }
+  if (!finCols.includes("purpose_id")) {
+    db.exec("ALTER TABLE finances ADD COLUMN purpose_id TEXT");
+  }
+  if (!finCols.includes("purpose_label")) {
+    db.exec("ALTER TABLE finances ADD COLUMN purpose_label TEXT");
+  }
+  const userCols = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
+  if (!userCols.includes("auth_user_id")) {
+    db.exec("ALTER TABLE users ADD COLUMN auth_user_id TEXT UNIQUE");
+  }
 }
 
 export function memberToJson(row, departmentIds = []) {
@@ -314,6 +355,7 @@ export function memberToJson(row, departmentIds = []) {
     departmentIds,
     active: !!row.active,
     joinedAt: row.joined_at,
+    dateOfBirth: row.date_of_birth || null,
     welfareNotes: row.welfare_notes || "",
   };
 }

@@ -1,6 +1,8 @@
+import { getSupabaseAccessToken, supabaseConfigured } from "@/lib/supabase";
+
 const API_BASE = "/api";
 
-function getToken() {
+function getLegacyToken() {
   return localStorage.getItem("celcm_token");
 }
 
@@ -19,12 +21,18 @@ export async function api<T>(
   if (!(options.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
   }
-  const token = getToken();
+
+  let token: string | null = null;
+  if (supabaseConfigured) {
+    token = await getSupabaseAccessToken();
+  } else {
+    token = getLegacyToken();
+  }
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
   if (res.status === 401) {
-    setToken(null);
+    if (!supabaseConfigured) setToken(null);
     window.location.href = "/";
     throw new Error("Session expired");
   }

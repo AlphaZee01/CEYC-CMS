@@ -8,6 +8,7 @@ import {
   resolveUserPages,
 } from "./rbac.js";
 import { logAudit } from "./audit.js";
+import { updateSupabaseAuthPassword } from "./auth-sync.js";
 
 export function registerCompletionRoutes(app, { upload, uid, getMemberDepartments, loadMember, UPLOAD_DIR }) {
   const logoStorage = upload;
@@ -18,7 +19,12 @@ export function registerCompletionRoutes(app, { upload, uid, getMemberDepartment
     if (!currentPassword || !newPassword || newPassword.length < 8) {
       return res.status(400).json({ error: "Password must be at least 8 characters" });
     }
-    const result = await changePassword(req.user.userId, currentPassword, newPassword);
+    const result = await changePassword(
+      req.user.userId,
+      currentPassword,
+      newPassword,
+      req.user.authUserId
+    );
     if (result.error) return res.status(400).json(result);
     await logAudit(req.user.member.id, "password_changed");
     res.json({ ok: true });
@@ -137,8 +143,16 @@ export function registerCompletionRoutes(app, { upload, uid, getMemberDepartment
     }
     const { password } = req.body;
     if (!password || password.length < 8) return res.status(400).json({ error: "Password 8+ chars required" });
-    const hash = await bcrypt.hash(password, 10);
-    await getDb().prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hash, req.params.id);
+    const db = getDb();
+    const user = await db.prepare("SELECT auth_user_id FROM users WHERE id = ?").get(req.params.id);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    const { useSupabaseAuth } = await import("./supabase.js");
+    if (useSupabaseAuth() && user.auth_user_id) {
+      await updateSupabaseAuthPassword(user.auth_user_id, password);
+    } else {
+      const hash = await bcrypt.hash(password, 10);
+      await db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hash, req.params.id);
+    }
     res.json({ ok: true });
   });
 

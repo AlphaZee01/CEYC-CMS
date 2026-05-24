@@ -3,6 +3,7 @@ import { AuthProvider, useAuth, useBootstrap } from "@/context/AuthContext";
 import LoginPage from "@/pages/LoginPage";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import { AppLayout } from "@/components/church/AppLayout";
+import { DashboardSkeleton, AppShellSkeleton } from "@/components/church/skeletons";
 import {
   DashboardPage,
   MembersPage,
@@ -21,8 +22,12 @@ import {
   MediaPage,
   ReportSubmissionsPage,
 } from "@/pages/church/ChurchPages";
-import type { PageId, Member, Cell, Fellowship, Department } from "@/types/church";
+import type { PageId, Member, Cell, Fellowship, Department, Role } from "@/types/church";
 import { useState, useEffect } from "react";
+
+function isPastoralRole(role: Role) {
+  return role === "Senior Pastor" || role === "Associate Pastor" || role === "Admin";
+}
 
 function ChurchApp() {
   const { user, pages } = useAuth();
@@ -36,11 +41,20 @@ function ChurchApp() {
   }, [pages, activePage]);
 
   if (!user) return null;
+
+  const layoutSettings = { name: (data?.settings?.name as string) || "Christ Embassy" };
+
   if (loading || !data) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <p className="text-muted-foreground">Loading church data...</p>
-      </div>
+      <AppLayout
+        activePage={activePage}
+        onNavigate={setActivePage}
+        pages={pages}
+        user={user.member}
+        settings={layoutSettings}
+      >
+        <DashboardSkeleton pastoral={isPastoralRole(user.member.role)} />
+      </AppLayout>
     );
   }
 
@@ -92,11 +106,7 @@ function ChurchApp() {
 function ProtectedApp() {
   const { user, loading } = useAuth();
   if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <p className="text-muted-foreground">Loading...</p>
-      </div>
-    );
+    return <AppShellSkeleton />;
   }
   if (!user) return <Navigate to="/" replace />;
   return <ChurchApp />;

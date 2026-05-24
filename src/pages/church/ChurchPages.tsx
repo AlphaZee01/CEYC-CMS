@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type ReactNode } from "react";
 import {
   Users,
   Network,
@@ -8,7 +8,6 @@ import {
   Edit,
   Trash2,
   Download,
-  Send,
   Search,
   Pin,
   Upload,
@@ -16,9 +15,25 @@ import {
   CheckCircle2,
   Circle,
   ChevronRight,
+  ChevronLeft,
+  Cake,
   Eye,
   EyeOff,
+  ChevronDown,
+  ChevronUp,
+  UserCheck,
+  UserX,
   FileText,
+  CalendarDays,
+  HandCoins,
+  TrendingUp,
+  TrendingDown,
+  Heart,
+  ClipboardList,
+  AlertCircle,
+  Church,
+  UsersRound,
+  UserPlus,
 } from "lucide-react";
 import {
   LineChart,
@@ -36,11 +51,18 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { api, exportCSV } from "@/lib/api";
-import { Card, Btn, Badge, Input, Select, Textarea, Modal, PageHeader, cn } from "@/components/church/ui";
+import { changeSupabasePassword, supabaseConfigured } from "@/lib/supabase";
+import { CURRENCY_SYMBOL, formatCurrency } from "@/lib/utils";
+import { Card, Btn, Badge, Input, Select, Textarea, Modal, PageHeader, TabBar, ModalFooter, IconBox, AvatarCircle, cn } from "@/components/church/ui";
+import { DashboardSkeleton, MemberListSkeleton } from "@/components/church/skeletons";
+import { CHART_COLORS, ICON_TONES, ICON_TONE_LIST, type IconTone } from "@/lib/icon-colors";
+import { pageHeaderProps } from "@/lib/page-icons";
 import { EventCalendar } from "@/components/church/EventCalendar";
+import { AttendanceCalendarView, type AttendanceRecord } from "@/components/church/AttendanceCalendar";
+import { ChatApp } from "@/components/church/ChatApp";
 import { PAGE_META, type Member, type Cell, type Fellowship, type Department, type PageId, type Role } from "@/types/church";
 
-export const CHART_COLORS = ["#5B21B6", "#0D9488", "#F97316", "#8B5CF6", "#14B8A6", "#FB7185"];
+export { CHART_COLORS };
 
 export const PAGE_ACCESS: Record<Role, PageId[]> = {
   "Senior Pastor": PAGE_META.map((p) => p.id),
@@ -77,17 +99,569 @@ export interface PageProps {
   onRefresh: () => void;
 }
 
-function StatCard({ label, value, icon: Icon, accent }: { label: string; value: string | number; icon: typeof Users; accent?: string }) {
+function StatCard({ label, value, icon: Icon, tone = "blue", sub }: { label: string; value: string | number; icon: typeof Users; tone?: IconTone; sub?: string }) {
   return (
-    <Card className="flex items-start justify-between">
-      <div>
-        <p className="text-sm text-muted-foreground">{label}</p>
-        <p className="mt-1 text-2xl font-bold text-[hsl(262,52%,32%)]">{value}</p>
+    <Card className="flex items-start justify-between gap-2 p-3 sm:p-5">
+      <div className="min-w-0">
+        <p className="text-xs text-muted-foreground sm:text-sm">{label}</p>
+        <p className="mt-1 truncate text-lg font-bold text-foreground sm:text-2xl">{value}</p>
+        {sub && <p className="mt-0.5 text-xs text-muted-foreground">{sub}</p>}
       </div>
-      <div className={cn("rounded-lg p-2.5", accent || "bg-[hsl(262,52%,32%)]/10")}>
-        <Icon className={cn("h-5 w-5", accent ? "text-white" : "text-[hsl(262,52%,32%)]")} />
-      </div>
+      <IconBox icon={Icon} tone={tone} size="md" variant="soft" />
     </Card>
+  );
+}
+
+function DashboardSection({ title, icon: Icon, tone = "blue", children, className }: { title: string; icon: typeof Users; tone?: IconTone; children: ReactNode; className?: string }) {
+  return (
+    <Card className={className}>
+      <div className="mb-4 flex items-center gap-3">
+        <IconBox icon={Icon} tone={tone} size="md" />
+        <h2 className="font-semibold">{title}</h2>
+      </div>
+      {children}
+    </Card>
+  );
+}
+
+interface DashboardOverview {
+  pastoral: boolean;
+  showFinances: boolean;
+  counts: {
+    members: number;
+    cells: number;
+    fellowships: number;
+    departments: number;
+    newMembersThisMonth: number;
+    pendingPrayers: number;
+    pendingTasks: number;
+    overdueTasks: number;
+    pendingReports: number;
+    activeFollowUps: number;
+  };
+  lastService: { date: string; present: number; absent: number; total: number; rate: number } | null;
+  previousService: { date: string; present: number; rate: number } | null;
+  lastServiceNewcomers: {
+    members: { id: string; name: string; role: string; phone: string | null; joinedAt: string }[];
+    guests: { name: string; contact: string | null }[];
+    total: number;
+  };
+  attendanceDelta: number | null;
+  lastOffering: { date: string; tithe: number; offering: number; seed: number; total: number } | null;
+  monthFinances: { income: number; expense: number; net: number; offeringTotal: number; titheTotal: number } | null;
+  cellHealth: { avgAttendance: number; meetingsThisMonth: number; topCell: { name: string; present: number; date: string } | null };
+  serviceTrend: { date: string; present: number }[];
+  fellowshipCellAttendance: { name: string; present: number }[];
+  prayersSummary: { pending: number; prayed: number; answered: number };
+  tasksDue: { id: string; title: string; dueDate: string; priority: string; status: string }[];
+  pendingReports: { id: string; type: string; period: string; submitterName: string; attendanceCount: number; newVisitors: number; status: string }[];
+  followUpsByStage: { stage: string; count: number }[];
+  nextEvent: { id: string; title: string; date: string; time: string; location: string; rsvpCount: number } | null;
+  announcements: { id: string; title: string; pinned: boolean }[];
+  birthdaysThisMonth: BirthdaysMonthSummary | null;
+}
+
+interface BirthdayCelebrant {
+  id: string;
+  name: string;
+  role: string;
+  phone: string | null;
+  dateOfBirth: string;
+  day: number;
+  dateLabel: string;
+  turningAge: number;
+  timing: "today" | "upcoming" | "past";
+}
+
+interface BirthdaysMonthSummary {
+  year: number;
+  month: number;
+  monthLabel: string;
+  count: number;
+  celebrants: BirthdayCelebrant[];
+}
+
+function birthdayTimingBadge(timing: BirthdayCelebrant["timing"]) {
+  if (timing === "today") return <Badge color="emerald">Today</Badge>;
+  if (timing === "upcoming") return <Badge color="sky">Upcoming</Badge>;
+  return <Badge color="gray">Celebrated</Badge>;
+}
+
+function BirthdaysModal({
+  open,
+  onClose,
+  initial,
+}: {
+  open: boolean;
+  onClose: () => void;
+  initial: BirthdaysMonthSummary;
+}) {
+  const [view, setView] = useState(initial);
+  const [loading, setLoading] = useState(false);
+  const now = new Date();
+  const isCurrentMonth = view.year === now.getFullYear() && view.month === now.getMonth() + 1;
+
+  useEffect(() => {
+    if (open) setView(initial);
+  }, [open, initial]);
+
+  const loadMonth = async (year: number, month: number) => {
+    setLoading(true);
+    try {
+      const data = await api<BirthdaysMonthSummary>(`/dashboard/birthdays?year=${year}&month=${month}`);
+      setView(data);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const shift = (delta: number) => {
+    const d = new Date(view.year, view.month - 1 + delta, 1);
+    loadMonth(d.getFullYear(), d.getMonth() + 1);
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Birthday Celebrants">
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-2 rounded-xl bg-muted/40 p-2">
+          <Btn variant="ghost" className="!min-h-[40px] !px-3" onClick={() => shift(-1)} disabled={loading}>
+            <ChevronLeft className="h-4 w-4" />
+          </Btn>
+          <div className="text-center">
+            <p className="font-semibold">{view.monthLabel}</p>
+            <p className="text-xs text-muted-foreground">
+              {isCurrentMonth ? "This month" : view.year < now.getFullYear() || (view.year === now.getFullYear() && view.month < now.getMonth() + 1) ? "Past month" : "Upcoming month"}
+            </p>
+          </div>
+          <Btn variant="ghost" className="!min-h-[40px] !px-3" onClick={() => shift(1)} disabled={loading}>
+            <ChevronRight className="h-4 w-4" />
+          </Btn>
+        </div>
+
+        {loading ? (
+          <div className="space-y-3 py-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-3 rounded-lg border p-3">
+                <div className="h-10 w-10 animate-pulse rounded-full bg-muted" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 w-32 animate-pulse rounded bg-muted" />
+                  <div className="h-3 w-24 animate-pulse rounded bg-muted" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : view.count === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">No birthdays recorded for {view.monthLabel}.</p>
+        ) : (
+          <ul className="max-h-[min(24rem,55dvh)] space-y-2 overflow-y-auto pr-1">
+            {view.celebrants.map((c) => (
+              <li key={c.id} className="flex items-center gap-3 rounded-xl border border-border bg-card p-3">
+                <AvatarCircle name={c.name} size="md" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-medium">{c.name}</p>
+                    {birthdayTimingBadge(c.timing)}
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {c.dateLabel} · turning {c.turningAge}
+                    {c.phone ? ` · ${c.phone}` : ""}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{c.role}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function BirthdaysSection({ summary }: { summary: BirthdaysMonthSummary }) {
+  const [open, setOpen] = useState(false);
+  const monthName = summary.monthLabel.split(" ")[0];
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="w-full text-left transition hover:opacity-95"
+      >
+        <Card className="border-violet-500/20 bg-gradient-to-br from-violet-500/5 to-rose-500/5 p-4 sm:p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <IconBox icon={Cake} tone="violet" size="md" />
+              <div>
+                <h2 className="font-semibold">Birthdays — {monthName}</h2>
+                <p className="text-sm text-muted-foreground">
+                  {summary.count === 0
+                    ? "No celebrants this month"
+                    : `${summary.count} member${summary.count === 1 ? "" : "s"} celebrating`}
+                </p>
+              </div>
+            </div>
+            <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground" />
+          </div>
+          {summary.count > 0 ? (
+            <ul className="space-y-2">
+              {summary.celebrants.slice(0, 5).map((c) => (
+                <li key={c.id} className="flex items-center justify-between gap-2 rounded-lg bg-background/80 px-3 py-2 text-sm">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <AvatarCircle name={c.name} size="sm" />
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{c.name}</p>
+                      <p className="text-xs text-muted-foreground">{c.dateLabel} · {c.role}</p>
+                    </div>
+                  </div>
+                  {c.timing === "today" ? (
+                    <Badge color="emerald">Today</Badge>
+                  ) : (
+                    <span className="shrink-0 text-xs font-medium text-violet-600">Day {c.day}</span>
+                  )}
+                </li>
+              ))}
+              {summary.count > 5 && (
+                <p className="pt-1 text-center text-xs font-medium text-violet-600">
+                  +{summary.count - 5} more — tap to browse all months
+                </p>
+              )}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground">Tap to browse birthdays in other months.</p>
+          )}
+        </Card>
+      </button>
+      <BirthdaysModal open={open} onClose={() => setOpen(false)} initial={summary} />
+    </>
+  );
+}
+
+function DeltaBadge({ delta }: { delta: number | null }) {
+  if (delta === null || delta === 0) return null;
+  const up = delta > 0;
+  return (
+    <span className={cn("inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-medium", up ? "bg-accent/10 text-accent" : "bg-highlight/10 text-highlight")}>
+      {up ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+      {up ? "+" : ""}{delta} vs last service
+    </span>
+  );
+}
+
+function PastorDashboard({
+  overview,
+  activities,
+  events,
+}: {
+  overview: DashboardOverview;
+  activities: { id: string; text: string; time: string }[];
+  events: { id: string; title: string; date: string; time: string; rsvpIds: string[] }[];
+}) {
+  const { lastService, lastOffering, monthFinances, cellHealth, serviceTrend, lastServiceNewcomers } = overview;
+
+  return (
+    <div className="space-y-6">
+      {/* Church at a glance */}
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-6">
+        <StatCard label="Members" value={overview.counts.members} icon={Users} tone="indigo" sub={overview.counts.newMembersThisMonth ? `+${overview.counts.newMembersThisMonth} this month` : undefined} />
+        <StatCard label="Cells" value={overview.counts.cells} icon={Network} tone="cyan" />
+        <StatCard label="Fellowships" value={overview.counts.fellowships} icon={Building2} tone="violet" />
+        {lastService ? (
+          <StatCard label="Last Service" value={lastService.present} icon={Church} tone="blue" sub={`${lastService.rate}% attendance`} />
+        ) : (
+          <StatCard label="Last Service" value="—" icon={Church} tone="blue" sub="No records yet" />
+        )}
+        {lastServiceNewcomers.total > 0 ? (
+          <StatCard label="New at Service" value={lastServiceNewcomers.total} icon={UserPlus} tone="emerald" sub="last Sunday" />
+        ) : overview.showFinances && lastOffering ? (
+          <StatCard label="Last Offering" value={formatCurrency(lastOffering.total)} icon={HandCoins} tone="amber" sub={lastOffering.date} />
+        ) : (
+          <StatCard label="Departments" value={overview.counts.departments} icon={Building2} tone="orange" />
+        )}
+        <StatCard label="Prayer Requests" value={overview.prayersSummary.pending} icon={Heart} tone="rose" sub="awaiting prayer" />
+      </div>
+
+      {/* Main situation cards */}
+      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+        <div className="space-y-4">
+          <DashboardSection title="Last Service Attendance" icon={CalendarDays} tone="blue">
+            {lastService ? (
+              <div className="space-y-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-3xl font-bold text-primary">{lastService.present}</p>
+                    <p className="text-sm text-muted-foreground">present on {lastService.date}</p>
+                  </div>
+                  <DeltaBadge delta={overview.attendanceDelta} />
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-lg bg-accent/10 p-3">
+                    <p className="text-lg font-semibold text-accent">{lastService.present}</p>
+                    <p className="text-xs text-muted-foreground">Present</p>
+                  </div>
+                  <div className="rounded-lg bg-highlight/10 p-3">
+                    <p className="text-lg font-semibold text-highlight">{lastService.absent}</p>
+                    <p className="text-xs text-muted-foreground">Absent</p>
+                  </div>
+                  <div className="rounded-lg bg-primary/10 p-3">
+                    <p className="text-lg font-semibold text-primary">{lastServiceNewcomers.total}</p>
+                    <p className="text-xs text-muted-foreground">New</p>
+                  </div>
+                </div>
+                {lastServiceNewcomers.total > 0 && (
+                  <div className="rounded-lg border border-primary/15 bg-primary/5 p-3">
+                    <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-primary">
+                      <UserPlus className="h-3.5 w-3.5" />
+                      New people at this service
+                    </p>
+                    <ul className="space-y-2">
+                      {lastServiceNewcomers.members.map((p) => (
+                        <li key={p.id} className="flex items-center justify-between gap-2 text-sm">
+                          <div className="min-w-0">
+                            <p className="truncate font-medium">{p.name}</p>
+                            <p className="text-xs text-muted-foreground">{p.role}{p.phone ? ` · ${p.phone}` : ""}</p>
+                          </div>
+                          <Badge color="teal">Member</Badge>
+                        </li>
+                      ))}
+                      {lastServiceNewcomers.guests.map((g) => (
+                        <li key={g.name} className="flex items-center justify-between gap-2 text-sm">
+                          <div className="min-w-0">
+                            <p className="truncate font-medium">{g.name}</p>
+                            {g.contact && <p className="text-xs text-muted-foreground">{g.contact}</p>}
+                          </div>
+                          <Badge color="coral">Guest</Badge>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {overview.previousService && (
+                  <p className="text-xs text-muted-foreground">
+                    Previous service ({overview.previousService.date}): {overview.previousService.present} present ({overview.previousService.rate}%)
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No service attendance recorded yet. Record attendance under the Attendance page.</p>
+            )}
+          </DashboardSection>
+
+          {serviceTrend.length > 1 && (
+            <DashboardSection title="Service Attendance Trend" icon={TrendingUp} tone="cyan">
+              <div className="h-48 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={serviceTrend}>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                    <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} />
+                    <Tooltip />
+                    <Line type="monotone" dataKey="present" stroke={CHART_COLORS[0]} strokeWidth={2} dot={{ r: 4 }} name="Present" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </DashboardSection>
+          )}
+        </div>
+
+        {overview.showFinances && (
+          <div className="space-y-4">
+            <DashboardSection title="Giving & Finances" icon={HandCoins} tone="emerald">
+              {lastOffering ? (
+                <div className="space-y-4">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Last service ({lastOffering.date})</p>
+                    <p className="text-2xl font-bold text-primary">{formatCurrency(lastOffering.total)}</p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-center text-sm">
+                    <div className="rounded-lg bg-muted/50 p-2">
+                      <p className="font-semibold">{formatCurrency(lastOffering.tithe)}</p>
+                      <p className="text-xs text-muted-foreground">Tithes</p>
+                    </div>
+                    <div className="rounded-lg bg-muted/50 p-2">
+                      <p className="font-semibold">{formatCurrency(lastOffering.offering)}</p>
+                      <p className="text-xs text-muted-foreground">Offering</p>
+                    </div>
+                    <div className="rounded-lg bg-muted/50 p-2">
+                      <p className="font-semibold">{formatCurrency(lastOffering.seed)}</p>
+                      <p className="text-xs text-muted-foreground">Seed</p>
+                    </div>
+                  </div>
+                  {monthFinances && (
+                    <div className="border-t border-border pt-3">
+                      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">This month</p>
+                      <div className="flex flex-wrap gap-3 text-sm">
+                        <span>Income: <strong className="text-accent">{formatCurrency(monthFinances.income)}</strong></span>
+                        <span>Expenses: <strong className="text-highlight">{formatCurrency(monthFinances.expense)}</strong></span>
+                        <span>Net: <strong>{formatCurrency(monthFinances.net)}</strong></span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No offering records yet.</p>
+              )}
+            </DashboardSection>
+            {overview.birthdaysThisMonth && (
+              <BirthdaysSection summary={overview.birthdaysThisMonth} />
+            )}
+          </div>
+        )}
+
+        {!overview.showFinances && overview.birthdaysThisMonth && (
+          <BirthdaysSection summary={overview.birthdaysThisMonth} />
+        )}
+
+        <DashboardSection title="Cell Ministry" icon={UsersRound} tone="violet">
+          <div className="space-y-3">
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Avg. cell attendance (30 days)</span>
+              <span className="font-semibold">{cellHealth.avgAttendance || "—"}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Cell meetings recorded</span>
+              <span className="font-semibold">{cellHealth.meetingsThisMonth}</span>
+            </div>
+            {cellHealth.topCell && (
+              <div className="rounded-lg bg-accent/10 p-3">
+                <p className="text-xs text-muted-foreground">Top performing cell</p>
+                <p className="font-medium">{cellHealth.topCell.name}</p>
+                <p className="text-sm">{cellHealth.topCell.present} present · {cellHealth.topCell.date}</p>
+              </div>
+            )}
+            {overview.fellowshipCellAttendance.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground">By fellowship (cell meetings)</p>
+                {overview.fellowshipCellAttendance.map((f) => (
+                  <div key={f.name} className="flex justify-between text-sm">
+                    <span>{f.name}</span>
+                    <span className="font-medium">{f.present} total</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </DashboardSection>
+
+        <DashboardSection title="Spiritual Care" icon={Heart} tone="rose">
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-lg bg-highlight/10 p-3">
+              <p className="text-xl font-bold text-highlight">{overview.prayersSummary.pending}</p>
+              <p className="text-xs text-muted-foreground">Pending</p>
+            </div>
+            <div className="rounded-lg bg-primary/10 p-3">
+              <p className="text-xl font-bold text-primary">{overview.prayersSummary.prayed}</p>
+              <p className="text-xs text-muted-foreground">Prayed</p>
+            </div>
+            <div className="rounded-lg bg-accent/10 p-3">
+              <p className="text-xl font-bold text-accent">{overview.prayersSummary.answered}</p>
+              <p className="text-xs text-muted-foreground">Answered</p>
+            </div>
+          </div>
+          {overview.followUpsByStage.length > 0 && (
+            <div className="mt-4 space-y-1.5 border-t border-border pt-3">
+              <p className="text-xs font-medium text-muted-foreground">Discipleship pipeline ({overview.counts.activeFollowUps} total)</p>
+              {overview.followUpsByStage.map((s) => (
+                <div key={s.stage} className="flex justify-between text-sm">
+                  <span>{s.stage}</span>
+                  <Badge color="purple">{s.count}</Badge>
+                </div>
+              ))}
+            </div>
+          )}
+        </DashboardSection>
+
+        <DashboardSection title="Operations" icon={ClipboardList} tone="amber">
+          <div className="mb-3 flex flex-wrap gap-2">
+            {overview.counts.overdueTasks > 0 && (
+              <Badge color="coral"><AlertCircle className="mr-1 inline h-3 w-3" />{overview.counts.overdueTasks} overdue tasks</Badge>
+            )}
+            {overview.counts.pendingReports > 0 && (
+              <Badge color="teal">{overview.counts.pendingReports} reports to review</Badge>
+            )}
+          </div>
+          {overview.tasksDue.length > 0 ? (
+            <ul className="space-y-2">
+              {overview.tasksDue.map((t) => (
+                <li key={t.id} className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2 text-sm">
+                  <span className="truncate pr-2">{t.title}</span>
+                  <Badge color={t.priority === "high" ? "coral" : "gray"}>{t.dueDate}</Badge>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground">No open tasks.</p>
+          )}
+          {overview.pendingReports.length > 0 && (
+            <div className="mt-4 border-t border-border pt-3">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">Reports awaiting review</p>
+              <ul className="space-y-2">
+                {overview.pendingReports.map((r) => (
+                  <li key={r.id} className="rounded-lg bg-muted/40 px-3 py-2 text-sm">
+                    <p className="font-medium capitalize">{r.type} report · {r.period}</p>
+                    <p className="text-xs text-muted-foreground">{r.submitterName} · {r.attendanceCount} attended · {r.newVisitors} visitors</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </DashboardSection>
+
+        {overview.nextEvent && (
+          <DashboardSection title="Next Event" icon={CalendarDays} tone="orange">
+            <p className="text-lg font-semibold">{overview.nextEvent.title}</p>
+            <p className="text-sm text-muted-foreground">{overview.nextEvent.date} · {overview.nextEvent.time}</p>
+            {overview.nextEvent.location && <p className="text-sm text-muted-foreground">{overview.nextEvent.location}</p>}
+            <Badge color="teal" className="mt-2">{overview.nextEvent.rsvpCount} RSVPs</Badge>
+          </DashboardSection>
+        )}
+      </div>
+
+      {/* Announcements strip */}
+      {overview.announcements.length > 0 && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {overview.announcements.map((a) => (
+            <Card key={a.id} className={cn("p-4", a.pinned && "border-primary/30 bg-primary/5")}>
+              <div className="flex items-start gap-2">
+                {a.pinned && <Pin className="mt-0.5 h-4 w-4 shrink-0 text-primary" />}
+                <p className="text-sm font-medium">{a.title}</p>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <h2 className="mb-4 font-semibold">Recent Activity</h2>
+          <ul className="space-y-3">
+            {activities.map((a, i) => (
+              <li key={a.id} className="flex gap-3 border-b border-border pb-3 last:border-0">
+                <div className={cn("mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full", ICON_TONES[ICON_TONE_LIST[i % ICON_TONE_LIST.length]].solid)} />
+                <div>
+                  <p className="text-sm">{a.text}</p>
+                  <p className="text-xs text-muted-foreground">{a.time}</p>
+                </div>
+              </li>
+            ))}
+            {activities.length === 0 && <p className="text-sm text-muted-foreground">No recent activity</p>}
+          </ul>
+        </Card>
+        <Card>
+          <h2 className="mb-4 font-semibold">Upcoming Events</h2>
+          {events.slice(0, 5).map((e) => (
+            <div key={e.id} className="mb-3 flex items-center justify-between rounded-lg bg-muted/50 p-3">
+              <div>
+                <p className="font-medium">{e.title}</p>
+                <p className="text-xs text-muted-foreground">{e.date} · {e.time}</p>
+              </div>
+              <Badge color="teal">{e.rsvpIds.length} RSVP</Badge>
+            </div>
+          ))}
+          {events.length === 0 && <p className="text-sm text-muted-foreground">No upcoming events</p>}
+        </Card>
+      </div>
+    </div>
   );
 }
 
@@ -119,47 +693,55 @@ function canManageSettings(role: Role) {
 // ─── Dashboard ─────────────────────────────────────────────────────────────────
 
 export function DashboardPage({ members, currentUser }: PageProps) {
+  const pastoral = isPastoral(currentUser.role) || currentUser.role === "Admin";
   const [stats, setStats] = useState({ members: 0, cells: 0, fellowships: 0, departments: 0 });
+  const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [activities, setActivities] = useState<{ id: string; text: string; time: string }[]>([]);
   const [events, setEvents] = useState<{ id: string; title: string; date: string; time: string; rsvpIds: string[] }[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([
-      api<typeof stats>("/dashboard/stats"),
-      api<typeof activities>("/activities"),
-      api<typeof events>("/events"),
-    ])
-      .then(([s, a, e]) => {
-        setStats(s);
-        setActivities(a);
-        setEvents(e);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+    const requests: Promise<void>[] = [
+      api<typeof activities>("/activities").then(setActivities).catch(() => {}),
+    ];
+    if (pastoral) {
+      requests.push(api<DashboardOverview>("/dashboard/overview").then(setOverview).catch(() => {}));
+    } else {
+      requests.push(api<typeof stats>("/dashboard/stats").then(setStats).catch(() => {}));
+    }
+    if (currentUser.role !== "Cell Member" && currentUser.role !== "Church Member") {
+      requests.push(api<typeof events>("/events").then(setEvents).catch(() => {}));
+    }
+    Promise.all(requests).finally(() => setLoading(false));
+  }, [currentUser.role, pastoral]);
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Dashboard" subtitle={`Welcome back, ${currentUser.name}`} />
+      <PageHeader
+        {...pageHeaderProps("dashboard")}
+        title="Dashboard"
+        subtitle={pastoral ? `Church overview · Welcome, ${currentUser.name}` : `Welcome back, ${currentUser.name}`}
+      />
       {loading ? (
-        <p className="text-muted-foreground">Loading...</p>
+        <DashboardSkeleton pastoral={pastoral} />
+      ) : pastoral && overview ? (
+        <PastorDashboard overview={overview} activities={activities} events={events} />
       ) : (
         <>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard label="Total Members" value={stats.members} icon={Users} />
-            <StatCard label="Cells" value={stats.cells} icon={Network} accent="bg-[hsl(174,55%,42%)]" />
-            <StatCard label="Fellowships" value={stats.fellowships} icon={Building2} accent="bg-[hsl(12,85%,62%)]" />
-            <StatCard label="Departments" value={stats.departments} icon={Building2} />
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+            <StatCard label="Total Members" value={stats.members} icon={Users} tone="indigo" />
+            <StatCard label="Cells" value={stats.cells} icon={Network} tone="cyan" />
+            <StatCard label="Fellowships" value={stats.fellowships} icon={Building2} tone="violet" />
+            <StatCard label="Departments" value={stats.departments} icon={Building2} tone="orange" />
           </div>
           <div className="grid gap-6 lg:grid-cols-2">
             <Card>
               <h2 className="mb-4 font-semibold">Recent Activity</h2>
               <ul className="space-y-3">
-                {activities.map((a) => (
+                {activities.map((a, i) => (
                   <li key={a.id} className="flex gap-3 border-b border-border pb-3 last:border-0">
-                    <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[hsl(174,55%,42%)]" />
+                    <div className={cn("mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full", ICON_TONES[ICON_TONE_LIST[i % ICON_TONE_LIST.length]].solid)} />
                     <div>
                       <p className="text-sm">{a.text}</p>
                       <p className="text-xs text-muted-foreground">{a.time}</p>
@@ -169,19 +751,20 @@ export function DashboardPage({ members, currentUser }: PageProps) {
                 {activities.length === 0 && <p className="text-sm text-muted-foreground">No recent activity</p>}
               </ul>
             </Card>
-            <Card>
-              <h2 className="mb-4 font-semibold">Upcoming Events</h2>
-              {events.slice(0, 5).map((e) => (
-                <div key={e.id} className="mb-3 flex items-center justify-between rounded-lg bg-muted/50 p-3">
-                  <div>
-                    <p className="font-medium">{e.title}</p>
-                    <p className="text-xs text-muted-foreground">{e.date} · {e.time}</p>
+            {events.length > 0 && (
+              <Card>
+                <h2 className="mb-4 font-semibold">Upcoming Events</h2>
+                {events.slice(0, 5).map((e) => (
+                  <div key={e.id} className="mb-3 flex items-center justify-between rounded-lg bg-muted/50 p-3">
+                    <div>
+                      <p className="font-medium">{e.title}</p>
+                      <p className="text-xs text-muted-foreground">{e.date} · {e.time}</p>
+                    </div>
+                    <Badge color="teal">{e.rsvpIds.length} RSVP</Badge>
                   </div>
-                  <Badge color="teal">{e.rsvpIds.length} RSVP</Badge>
-                </div>
-              ))}
-              {events.length === 0 && <p className="text-sm text-muted-foreground">No upcoming events</p>}
-            </Card>
+                ))}
+              </Card>
+            )}
           </div>
         </>
       )}
@@ -238,6 +821,7 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
             fellowshipId: edit.fellowshipId || null,
             departmentIds: edit.departmentIds || [],
             password: edit.password,
+            dateOfBirth: edit.dateOfBirth || null,
           }),
         });
       } else if (edit.id) {
@@ -251,6 +835,7 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
             cellId: edit.cellId,
             fellowshipId: edit.fellowshipId,
             departmentIds: edit.departmentIds,
+            dateOfBirth: edit.dateOfBirth || null,
           }),
         });
         if (["Senior Pastor", "Admin"].includes(currentUser.role) && edit.welfareNotes !== undefined) {
@@ -282,6 +867,7 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
   return (
     <div className="space-y-6">
       <PageHeader
+        {...pageHeaderProps("members")}
         title="Members"
         subtitle="Directory & role management"
         action={
@@ -292,63 +878,93 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
           ) : undefined
         }
       />
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <div className="relative sm:col-span-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="relative lg:col-span-2">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search members..." className="w-full rounded-lg border border-input py-2 pl-10 pr-3 text-sm" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search members..." className="w-full min-h-[44px] rounded-lg border border-input py-2 pl-10 pr-3 text-base sm:text-sm" />
         </div>
         <Select value={filterRole} onChange={setFilterRole} options={[{ value: "", label: "All roles" }, ...ROLES.map((r) => ({ value: r, label: r }))]} />
         <Select value={filterCell} onChange={setFilterCell} options={[{ value: "", label: "All cells" }, ...cells.map((c) => ({ value: c.id, label: c.name }))]} />
         <Select value={filterFellowship} onChange={setFilterFellowship} options={[{ value: "", label: "All fellowships" }, ...fellowships.map((f) => ({ value: f.id, label: f.name }))]} />
         <Select value={filterDept} onChange={setFilterDept} options={[{ value: "", label: "All departments" }, ...departments.map((d) => ({ value: d.id, label: d.name }))]} />
       </div>
-      <Card className="overflow-x-auto p-0">
-        {loading ? (
-          <p className="p-4 text-muted-foreground">Loading...</p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead className="border-b bg-muted/50">
-              <tr>
-                <th className="px-4 py-3 text-left">Name</th>
-                <th className="px-4 py-3 text-left">Role</th>
-                <th className="hidden px-4 py-3 text-left md:table-cell">Cell</th>
-                <th className="hidden px-4 py-3 text-left lg:table-cell">Fellowship</th>
-                <th className="px-4 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((m) => (
-                <tr key={m.id} className="border-b last:border-0 hover:bg-muted/30">
-                  <td className="px-4 py-3">
+      {loading ? (
+        <MemberListSkeleton />
+      ) : (
+        <>
+          <div className="space-y-3 md:hidden">
+            {list.map((m) => (
+              <Card key={m.id} className="p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
                     <p className="font-medium">{m.name}</p>
-                    <p className="text-xs text-muted-foreground">{m.email}</p>
-                  </td>
-                  <td className="px-4 py-3"><Badge color="purple">{m.role}</Badge></td>
-                  <td className="hidden px-4 py-3 md:table-cell">{cells.find((c) => c.id === m.cellId)?.name || "—"}</td>
-                  <td className="hidden px-4 py-3 lg:table-cell">{fellowships.find((f) => f.id === m.fellowshipId)?.name || "—"}</td>
-                  <td className="px-4 py-3 text-right">
-                    {canManageMembers(currentUser.role) && (
-                      <div className="flex justify-end gap-1">
-                        <button type="button" className="rounded p-1 hover:bg-muted" onClick={() => { setEdit(m); setModal("edit"); }}>
-                          <Edit className="h-4 w-4" />
-                        </button>
-                        <button type="button" className="rounded p-1 text-destructive hover:bg-muted" onClick={() => deactivate(m)}>
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    )}
-                  </td>
+                    <p className="truncate text-xs text-muted-foreground">{m.email}</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Badge color="purple">{m.role}</Badge>
+                      {m.cellId && <Badge color="gray">{cells.find((c) => c.id === m.cellId)?.name}</Badge>}
+                    </div>
+                  </div>
+                  {canManageMembers(currentUser.role) && (
+                    <div className="flex shrink-0 gap-1">
+                      <button type="button" className="touch-target flex items-center justify-center rounded-lg hover:bg-muted" onClick={() => { setEdit(m); setModal("edit"); }} aria-label="Edit member">
+                        <Edit className="h-4 w-4" />
+                      </button>
+                      <button type="button" className="touch-target flex items-center justify-center rounded-lg text-destructive hover:bg-muted" onClick={() => deactivate(m)} aria-label="Deactivate member">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            ))}
+            {list.length === 0 && <Card><p className="text-sm text-muted-foreground">No members found</p></Card>}
+          </div>
+          <Card className="hidden overflow-x-auto p-0 md:block">
+            <table className="w-full text-sm">
+              <thead className="border-b bg-muted/50">
+                <tr>
+                  <th className="px-4 py-3 text-left">Name</th>
+                  <th className="px-4 py-3 text-left">Role</th>
+                  <th className="hidden px-4 py-3 text-left md:table-cell">Cell</th>
+                  <th className="hidden px-4 py-3 text-left lg:table-cell">Fellowship</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
+              </thead>
+              <tbody>
+                {list.map((m) => (
+                  <tr key={m.id} className="border-b last:border-0 hover:bg-muted/30">
+                    <td className="px-4 py-3">
+                      <p className="font-medium">{m.name}</p>
+                      <p className="text-xs text-muted-foreground">{m.email}</p>
+                    </td>
+                    <td className="px-4 py-3"><Badge color="purple">{m.role}</Badge></td>
+                    <td className="hidden px-4 py-3 md:table-cell">{cells.find((c) => c.id === m.cellId)?.name || "—"}</td>
+                    <td className="hidden px-4 py-3 lg:table-cell">{fellowships.find((f) => f.id === m.fellowshipId)?.name || "—"}</td>
+                    <td className="px-4 py-3 text-right">
+                      {canManageMembers(currentUser.role) && (
+                        <div className="flex justify-end gap-1">
+                          <button type="button" className="rounded p-1 hover:bg-muted" onClick={() => { setEdit(m); setModal("edit"); }}>
+                            <Edit className="h-4 w-4" />
+                          </button>
+                          <button type="button" className="rounded p-1 text-destructive hover:bg-muted" onClick={() => deactivate(m)}>
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </>
+      )}
       <Modal open={!!modal} onClose={() => setModal(null)} title={modal === "add" ? "Add Member" : "Edit Member"}>
         <div className="space-y-3">
           <Input label="Full Name" value={edit.name || ""} onChange={(v) => setEdit((e) => ({ ...e, name: v }))} />
           <Input label="Email" value={edit.email || ""} onChange={(v) => setEdit((e) => ({ ...e, email: v }))} />
           <Input label="Phone" value={edit.phone || ""} onChange={(v) => setEdit((e) => ({ ...e, phone: v }))} />
+          <Input label="Date of birth" type="date" value={edit.dateOfBirth || ""} onChange={(v) => setEdit((e) => ({ ...e, dateOfBirth: v || null }))} />
           {modal === "add" && <Input label="Password (optional)" type="password" value={edit.password || ""} onChange={(v) => setEdit((e) => ({ ...e, password: v }))} />}
           <Select label="Role" value={edit.role || "Church Member"} onChange={(v) => setEdit((e) => ({ ...e, role: v as Role }))} options={ROLES.map((r) => ({ value: r, label: r }))} />
           <Select label="Cell" value={edit.cellId || ""} onChange={(v) => setEdit((e) => ({ ...e, cellId: v || null }))} options={[{ value: "", label: "None" }, ...cells.map((c) => ({ value: c.id, label: c.name }))]} />
@@ -356,10 +972,10 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
           {["Senior Pastor", "Admin"].includes(currentUser.role) && modal === "edit" && edit.id && (
             <Textarea label="Welfare / pastoral notes (Admin)" value={edit.welfareNotes || ""} onChange={(v) => setEdit((e) => ({ ...e, welfareNotes: v }))} />
           )}
-          <div className="flex justify-end gap-2 pt-2">
+          <ModalFooter>
             <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
             <Btn onClick={saveMember} disabled={saving}>{saving ? "Saving..." : "Save"}</Btn>
-          </div>
+          </ModalFooter>
         </div>
       </Modal>
     </div>
@@ -432,6 +1048,7 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
   return (
     <div className="space-y-6">
       <PageHeader
+        {...pageHeaderProps("cells")}
         title="Cells & Fellowships"
         subtitle="Manage structure and leadership"
         action={
@@ -447,7 +1064,7 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
         <Card key={f.id}>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="text-lg font-semibold text-[hsl(262,52%,32%)]">{f.name}</h2>
+              <h2 className="text-lg font-semibold text-primary">{f.name}</h2>
               <p className="text-sm text-muted-foreground">Leader: {memberName(members, f.leaderId)}</p>
             </div>
             <div className="flex items-center gap-2">
@@ -556,7 +1173,7 @@ export function DepartmentsPage({ members, departments: propDepts, onRefresh }: 
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Ministry Departments" subtitle="Department heads and serving members" action={<Btn onClick={() => { setEditId(null); setForm({ name: "", headId: "", memberIds: [] }); setModal("new"); }}><Plus className="h-4 w-4" /> New Department</Btn>} />
+      <PageHeader {...pageHeaderProps("departments")} title="Ministry Departments" subtitle="Department heads and serving members" action={<Btn onClick={() => { setEditId(null); setForm({ name: "", headId: "", memberIds: [] }); setModal("new"); }}><Plus className="h-4 w-4" /> New Department</Btn>} />
       <div className="grid gap-4 md:grid-cols-2">
         {departments.map((d) => (
           <Card key={d.id}>
@@ -597,14 +1214,108 @@ export function DepartmentsPage({ members, departments: propDepts, onRefresh }: 
   );
 }
 
-// ─── Attendance ────────────────────────────────────────────────────────────────
+function attendanceEventLabel(record: AttendanceRecord, cells: Cell[]) {
+  return record.type === "service"
+    ? "Sunday Service"
+    : cells.find((c) => c.id === record.cellId)?.name || "Cell meeting";
+}
 
-export function AttendancePage({ members, cells, onRefresh }: PageProps) {
+function AttendanceMemberLog({
+  member,
+  records,
+  cells,
+  expanded,
+  onToggle,
+}: {
+  member: Member;
+  records: AttendanceRecord[];
+  cells: Cell[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const log = records
+    .filter((r) => r.presentIds.includes(member.id) || r.absentIds.includes(member.id))
+    .map((r) => ({
+      id: r.id,
+      date: r.date,
+      label: attendanceEventLabel(r, cells),
+      type: r.type,
+      status: r.presentIds.includes(member.id) ? ("present" as const) : ("absent" as const),
+      isNewcomer: r.newcomerIds?.includes(member.id),
+    }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  const presentCount = log.filter((e) => e.status === "present").length;
+  const absentCount = log.filter((e) => e.status === "absent").length;
+  const total = presentCount + absentCount;
+  const rate = total ? Math.round((presentCount / total) * 100) : 0;
+
+  return (
+    <Card className="overflow-hidden p-0">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-3 p-4 text-left transition hover:bg-muted/40"
+      >
+        <AvatarCircle name={member.name} size="md" />
+        <div className="min-w-0 flex-1">
+          <p className="font-medium">{member.name}</p>
+          <p className="text-xs text-muted-foreground">{member.role}{member.phone ? ` · ${member.phone}` : ""}</p>
+        </div>
+        <div className="hidden shrink-0 text-right text-xs sm:block">
+          <p className="font-medium text-emerald-600">{presentCount} present</p>
+          <p className="text-muted-foreground">{absentCount} absent · {rate}%</p>
+        </div>
+        <Badge color="gray">{log.length} records</Badge>
+        {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+      </button>
+      {expanded && (
+        <div className="border-t bg-muted/20 px-4 py-3">
+          <div className="mb-3 flex flex-wrap gap-2 text-xs sm:hidden">
+            <Badge color="emerald">{presentCount} present</Badge>
+            <Badge color="rose">{absentCount} absent</Badge>
+            <Badge color="sky">{rate}% rate</Badge>
+          </div>
+          {log.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No attendance records for this member yet.</p>
+          ) : (
+            <ul className="max-h-64 space-y-2 overflow-y-auto">
+              {log.map((entry) => (
+                <li key={entry.id} className="flex items-center justify-between gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
+                  <div className="min-w-0">
+                    <p className="font-medium">{entry.date}</p>
+                    <p className="truncate text-xs text-muted-foreground">{entry.label}</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {entry.isNewcomer && <Badge color="violet">New</Badge>}
+                    {entry.status === "present" ? (
+                      <Badge color="emerald"><UserCheck className="mr-1 inline h-3 w-3" />Present</Badge>
+                    ) : (
+                      <Badge color="rose"><UserX className="mr-1 inline h-3 w-3" />Absent</Badge>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+export function AttendancePage({ members, cells, fellowships, onRefresh }: PageProps) {
+  const [pageTab, setPageTab] = useState<"calendar" | "members" | "record">("calendar");
+  const [mode, setMode] = useState<"cell" | "service">("cell");
   const [trends, setTrends] = useState<{ date: string; cell_name: string; present_count: number }[]>([]);
-  const [records, setRecords] = useState<{ id: string; date: string; type: string; cellId: string | null; presentIds: string[]; absentIds: string[] }[]>([]);
+  const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [cellId, setCellId] = useState(cells[0]?.id || "");
   const [present, setPresent] = useState<Set<string>>(new Set());
+  const [newcomers, setNewcomers] = useState<Set<string>>(new Set());
+  const [guestNames, setGuestNames] = useState("");
+  const [memberSearch, setMemberSearch] = useState("");
+  const [expandedMemberId, setExpandedMemberId] = useState<string | null>(null);
 
   const load = () => api<typeof records>("/attendance").then(setRecords).catch(() => {});
 
@@ -623,40 +1334,121 @@ export function AttendancePage({ members, cells, onRefresh }: PageProps) {
   const trendData = Object.values(trendChart).slice(-6);
 
   const cellMembers = members.filter((m) => m.cellId === cellId && m.active);
+  const serviceMembers = members.filter((m) => m.active);
+
+  const togglePresent = (id: string) => {
+    const next = new Set(present);
+    if (next.has(id)) {
+      next.delete(id);
+      const nc = new Set(newcomers);
+      nc.delete(id);
+      setNewcomers(nc);
+    } else {
+      next.add(id);
+    }
+    setPresent(next);
+  };
+
+  const toggleNewcomer = (id: string) => {
+    if (!present.has(id)) return;
+    const next = new Set(newcomers);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setNewcomers(next);
+  };
 
   const save = async () => {
     const presentIds = [...present];
-    const absentIds = cellMembers.map((m) => m.id).filter((id) => !presentIds.includes(id));
+    const pool = mode === "cell" ? cellMembers : serviceMembers;
+    const absentIds = pool.map((m) => m.id).filter((id) => !presentIds.includes(id));
+    const guests = guestNames
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((name) => ({ name }));
     await api("/attendance", {
       method: "POST",
-      body: JSON.stringify({ date, type: "cell", cellId, presentIds, absentIds }),
+      body: JSON.stringify({
+        date,
+        type: mode,
+        cellId: mode === "cell" ? cellId : undefined,
+        presentIds,
+        absentIds,
+        newcomerIds: mode === "service" ? [...newcomers] : [],
+        guests: mode === "service" ? guests : [],
+      }),
     });
     setPresent(new Set());
+    setNewcomers(new Set());
+    setGuestNames("");
     load();
     onRefresh();
   };
 
+  const roster = mode === "cell" ? cellMembers : serviceMembers;
+
+  const filteredMembers = members
+    .filter((m) => m.active)
+    .filter((m) => !memberSearch || m.name.toLowerCase().includes(memberSearch.toLowerCase()) || m.role.toLowerCase().includes(memberSearch.toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
   return (
     <div className="space-y-6">
-      <PageHeader title="Attendance" subtitle="Record and review attendance" />
+      <PageHeader {...pageHeaderProps("attendance")} title="Attendance" subtitle="View attendance by date, member, or record a new meeting" />
+      <TabBar
+        tabs={[
+          { id: "calendar" as const, label: "Calendar" },
+          { id: "members" as const, label: "By Member" },
+          { id: "record" as const, label: "Add New Attendance" },
+        ]}
+        value={pageTab}
+        onChange={setPageTab}
+      />
+
+      {pageTab === "record" && (
+        <>
+      <TabBar
+        tabs={[
+          { id: "cell" as const, label: "Cell Meeting" },
+          { id: "service" as const, label: "Sunday Service" },
+        ]}
+        value={mode}
+        onChange={setMode}
+      />
       <Card>
-        <h2 className="mb-4 font-semibold">Record Attendance</h2>
+        <h2 className="mb-4 font-semibold">{mode === "cell" ? "Record Cell Attendance" : "Record Service Attendance"}</h2>
         <div className="grid gap-4 sm:grid-cols-2">
           <Input label="Date" type="date" value={date} onChange={setDate} />
-          <Select label="Cell" value={cellId} onChange={setCellId} options={cells.map((c) => ({ value: c.id, label: c.name }))} />
+          {mode === "cell" && (
+            <Select label="Cell" value={cellId} onChange={setCellId} options={cells.map((c) => ({ value: c.id, label: c.name }))} />
+          )}
         </div>
         <div className="mt-4 space-y-2">
-          {cellMembers.map((m) => (
-            <label key={m.id} className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 hover:bg-muted/50">
-              <input type="checkbox" checked={present.has(m.id)} onChange={() => {
-                const next = new Set(present);
-                if (next.has(m.id)) next.delete(m.id); else next.add(m.id);
-                setPresent(next);
-              }} />
-              <span>{m.name}</span>
-            </label>
+          {roster.map((m) => (
+            <div key={m.id} className="flex items-center gap-2 rounded-lg border p-3 hover:bg-muted/50">
+              <label className="flex flex-1 cursor-pointer items-center gap-3">
+                <input type="checkbox" checked={present.has(m.id)} onChange={() => togglePresent(m.id)} />
+                <span>{m.name}</span>
+              </label>
+              {mode === "service" && present.has(m.id) && (
+                <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                  <input type="checkbox" checked={newcomers.has(m.id)} onChange={() => toggleNewcomer(m.id)} />
+                  New
+                </label>
+              )}
+            </div>
           ))}
         </div>
+        {mode === "service" && (
+          <div className="mt-4">
+            <Textarea
+              label="First-time guests (one name per line)"
+              value={guestNames}
+              onChange={setGuestNames}
+              rows={3}
+            />
+          </div>
+        )}
         <Btn className="mt-4" onClick={save}>Save Attendance</Btn>
       </Card>
       {trendData.length > 0 && (
@@ -676,15 +1468,45 @@ export function AttendancePage({ members, cells, onRefresh }: PageProps) {
           </ResponsiveContainer>
         </Card>
       )}
-      <Card>
-        <h2 className="mb-4 font-semibold">History</h2>
-        {records.map((a) => (
-          <div key={a.id} className="mb-3 flex justify-between border-b pb-3 text-sm last:border-0">
-            <span>{a.date} — {cells.find((c) => c.id === a.cellId)?.name || a.type}</span>
-            <Badge color="teal">{a.presentIds.length} present</Badge>
+        </>
+      )}
+
+      {pageTab === "calendar" && (
+        <AttendanceCalendarView
+          records={records}
+          members={members}
+          cells={cells}
+          fellowships={fellowships}
+        />
+      )}
+
+      {pageTab === "members" && (
+        <div className="space-y-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              value={memberSearch}
+              onChange={(e) => setMemberSearch(e.target.value)}
+              placeholder="Search members..."
+              className="w-full min-h-[44px] rounded-lg border border-input py-2 pl-10 pr-3 text-base sm:text-sm"
+            />
           </div>
-        ))}
-      </Card>
+          {filteredMembers.length === 0 ? (
+            <Card><p className="text-sm text-muted-foreground">No members match your search.</p></Card>
+          ) : (
+            filteredMembers.map((m) => (
+              <AttendanceMemberLog
+                key={m.id}
+                member={m}
+                records={records}
+                cells={cells}
+                expanded={expandedMemberId === m.id}
+                onToggle={() => setExpandedMemberId(expandedMemberId === m.id ? null : m.id)}
+              />
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -716,7 +1538,7 @@ export function EventsPage({ currentUser, onRefresh }: PageProps) {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Events" subtitle="Church calendar and RSVPs" action={<Btn onClick={() => setModal(true)}><Plus className="h-4 w-4" /> New Event</Btn>} />
+      <PageHeader {...pageHeaderProps("events")} title="Events" subtitle="Church calendar and RSVPs" action={<Btn onClick={() => setModal(true)}><Plus className="h-4 w-4" /> New Event</Btn>} />
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-1">
           <h2 className="mb-3 font-semibold">Calendar</h2>
@@ -732,7 +1554,7 @@ export function EventsPage({ currentUser, onRefresh }: PageProps) {
             {events
               .filter((e) => !selectedDate || e.date === selectedDate.toISOString().slice(0, 10))
               .map((e) => (
-                <div key={e.id} className="rounded-lg bg-[hsl(262,52%,32%)]/5 p-2 text-sm">
+                <div key={e.id} className="rounded-lg bg-primary/5 p-2 text-sm">
                   <p className="font-medium">{e.title}</p>
                   <p className="text-xs text-muted-foreground">{e.time}</p>
                 </div>
@@ -807,7 +1629,7 @@ export function ReportsPage({ departments }: PageProps) {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Reports & Analytics" subtitle="Growth, attendance, and participation" action={<Btn variant="accent" onClick={handleExport}><Download className="h-4 w-4" /> Export CSV</Btn>} />
+      <PageHeader {...pageHeaderProps("reports")} title="Reports & Analytics" subtitle="Growth, attendance, and participation" action={<Btn variant="accent" onClick={handleExport}><Download className="h-4 w-4" /> Export CSV</Btn>} />
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <h2 className="mb-4 font-semibold">Member Growth</h2>
@@ -903,7 +1725,11 @@ export function SettingsPage({ members, settings: propSettings, currentUser, onR
   const changePassword = async () => {
     if (pwForm.next !== pwForm.confirm) { setPwMsg("Passwords do not match"); return; }
     try {
-      await api("/auth/change-password", { method: "POST", body: JSON.stringify({ currentPassword: pwForm.current, newPassword: pwForm.next }) });
+      if (supabaseConfigured) {
+        await changeSupabasePassword(pwForm.current, pwForm.next, currentUser.email);
+      } else {
+        await api("/auth/change-password", { method: "POST", body: JSON.stringify({ currentPassword: pwForm.current, newPassword: pwForm.next }) });
+      }
       setPwMsg("Password updated.");
       setPwForm({ current: "", next: "", confirm: "" });
     } catch (e) {
@@ -922,7 +1748,7 @@ export function SettingsPage({ members, settings: propSettings, currentUser, onR
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Settings" subtitle="Church profile and admin accounts" />
+      <PageHeader {...pageHeaderProps("settings")} title="Settings" subtitle="Church profile and admin accounts" />
       <Card>
         <h2 className="mb-4 font-semibold">Change Password</h2>
         <p className="mb-3 text-sm text-muted-foreground">Account: {userAccount?.email}</p>
@@ -931,7 +1757,7 @@ export function SettingsPage({ members, settings: propSettings, currentUser, onR
           <Input label="New" type="password" value={pwForm.next} onChange={(v) => setPwForm((p) => ({ ...p, next: v }))} />
           <Input label="Confirm" type="password" value={pwForm.confirm} onChange={(v) => setPwForm((p) => ({ ...p, confirm: v }))} />
         </div>
-        {pwMsg && <p className="mt-2 text-sm text-[hsl(174,55%,42%)]">{pwMsg}</p>}
+        {pwMsg && <p className="mt-2 text-sm text-accent">{pwMsg}</p>}
         <Btn className="mt-3" onClick={changePassword}>Update Password</Btn>
       </Card>
       <Card>
@@ -1004,96 +1830,8 @@ export function SettingsPage({ members, settings: propSettings, currentUser, onR
 
 // ─── Communications ────────────────────────────────────────────────────────────
 
-interface Message {
-  id: string;
-  fromId: string;
-  toIds: string[];
-  subject: string;
-  body: string;
-  sentAt: string;
-  read: boolean;
-  broadcast: boolean;
-}
-
 export function CommunicationsPage({ members, currentUser }: PageProps) {
-  const [tab, setTab] = useState<"inbox" | "sent">("inbox");
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
-  const [target, setTarget] = useState("");
-  const [broadcast, setBroadcast] = useState(false);
-
-  const load = () => api<Message[]>(`/messages?box=${tab}`).then(setMessages).catch(() => {});
-
-  useEffect(() => { load(); }, [tab]);
-
-  const send = async () => {
-    if (!subject || !body) return;
-    await api("/messages", {
-      method: "POST",
-      body: JSON.stringify({
-        subject,
-        body,
-        broadcast,
-        toIds: broadcast ? undefined : target ? [target] : [],
-      }),
-    });
-    setSubject("");
-    setBody("");
-    setTarget("");
-    setBroadcast(false);
-    setTab("sent");
-    load();
-  };
-
-  const recipientOptions = [
-    { value: "", label: "Select recipient..." },
-    ...(currentUser.role === "Senior Pastor" || currentUser.role === "Admin"
-      ? [{ value: "__broadcast__", label: "Broadcast — All Members" }]
-      : []),
-    ...members.filter((m) => m.active && m.id !== currentUser.id).map((m) => ({ value: m.id, label: `${m.name} (${m.role})` })),
-  ];
-
-  return (
-    <div className="space-y-6">
-      <PageHeader title="Communications" subtitle="Messages and broadcasts" />
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <h2 className="mb-4 font-semibold">Compose</h2>
-          <div className="space-y-3">
-            <Select
-              label="Recipient"
-              value={broadcast ? "__broadcast__" : target}
-              onChange={(v) => {
-                if (v === "__broadcast__") { setBroadcast(true); setTarget(""); }
-                else { setBroadcast(false); setTarget(v); }
-              }}
-              options={recipientOptions}
-            />
-            <Input label="Subject" value={subject} onChange={setSubject} />
-            <Textarea label="Message" value={body} onChange={setBody} rows={5} />
-            <Btn onClick={send}><Send className="h-4 w-4" /> Send</Btn>
-          </div>
-        </Card>
-        <Card>
-          <div className="mb-4 flex gap-2">
-            <button type="button" onClick={() => setTab("inbox")} className={cn("rounded-lg px-3 py-1 text-sm", tab === "inbox" ? "bg-[hsl(262,52%,32%)] text-white" : "bg-muted")}>Inbox</button>
-            <button type="button" onClick={() => setTab("sent")} className={cn("rounded-lg px-3 py-1 text-sm", tab === "sent" ? "bg-[hsl(262,52%,32%)] text-white" : "bg-muted")}>Sent</button>
-          </div>
-          {messages.map((m) => (
-            <div key={m.id} className="mb-3 rounded-lg border p-3 text-sm">
-              <p className="font-medium">{m.subject} {m.broadcast && <Badge color="coral">Broadcast</Badge>}</p>
-              <p className="text-xs text-muted-foreground">
-                {tab === "inbox" ? `From: ${memberName(members, m.fromId)}` : "Sent"} · {new Date(m.sentAt).toLocaleDateString()}
-              </p>
-              <p className="mt-2">{m.body}</p>
-            </div>
-          ))}
-          {messages.length === 0 && <p className="text-sm text-muted-foreground">No messages</p>}
-        </Card>
-      </div>
-    </div>
-  );
+  return <ChatApp members={members} currentUser={currentUser} />;
 }
 
 // ─── Finances ──────────────────────────────────────────────────────────────────
@@ -1106,20 +1844,77 @@ interface FinanceRecord {
   amount: number;
   memberId: string | null;
   description: string;
+  purposeType?: string | null;
+  purposeId?: string | null;
+  purposeLabel?: string | null;
+  purposeDisplay?: string | null;
 }
+
+type ExpensePurpose = "service" | "event" | "cell" | "outreach" | "general" | "other";
+
+const INCOME_CATEGORIES = ["Tithe", "Offering", "Seed", "Project Fund"];
+const EXPENSE_CATEGORIES = [
+  "Refreshments",
+  "Transport",
+  "Sound & Media",
+  "Venue & Setup",
+  "Printing",
+  "Decorations",
+  "Honorarium",
+  "Equipment",
+  "Utilities",
+  "Outreach",
+  "Other",
+];
+
+const PURPOSE_LABELS: Record<ExpensePurpose, string> = {
+  service: "Sunday Service",
+  event: "Event",
+  cell: "Cell Meeting",
+  outreach: "Outreach",
+  general: "General / Church",
+  other: "Other",
+};
 
 export function FinancesPage({ members, currentUser }: PageProps) {
   const [records, setRecords] = useState<FinanceRecord[]>([]);
   const [tithes, setTithes] = useState<{ memberId: string | null; memberName: string; total: number; records: FinanceRecord[] }[]>([]);
-  const [tab, setTab] = useState<"ledger" | "transactions">("ledger");
-  const [form, setForm] = useState({ type: "income" as "income" | "expense", category: "Tithe", amount: "", description: "", memberId: "" });
+  const [contexts, setContexts] = useState<{
+    services: { id: string; date: string; label: string }[];
+    events: { id: string; title: string; date: string; label: string }[];
+    cells: { id: string; name: string; label: string }[];
+  }>({ services: [], events: [], cells: [] });
+  const [tab, setTab] = useState<"ledger" | "expenses" | "transactions">("ledger");
+  const [incomeForm, setIncomeForm] = useState({
+    category: "Tithe",
+    amount: "",
+    description: "",
+    memberId: "",
+    date: new Date().toISOString().slice(0, 10),
+  });
+  const [expenseForm, setExpenseForm] = useState({
+    date: new Date().toISOString().slice(0, 10),
+    category: "Refreshments",
+    amount: "",
+    description: "",
+    purposeType: "service" as ExpensePurpose,
+    purposeId: "",
+    purposeLabel: "",
+  });
 
   const load = () => {
     api<FinanceRecord[]>("/finances").then(setRecords).catch(() => {});
     api<{ ledger: typeof tithes }>("/finances/tithes").then((d) => setTithes(d.ledger)).catch(() => {});
+    api<typeof contexts>("/finances/expense-contexts").then(setContexts).catch(() => {});
   };
 
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    if (contexts.services.length && !expenseForm.purposeId && expenseForm.purposeType === "service") {
+      setExpenseForm((f) => ({ ...f, purposeId: contexts.services[0].id }));
+    }
+  }, [contexts.services, expenseForm.purposeId, expenseForm.purposeType]);
 
   if (!canAccessFinances(currentUser.role)) {
     return <Card><p className="text-muted-foreground">You do not have access to finances.</p></Card>;
@@ -1127,88 +1922,295 @@ export function FinancesPage({ members, currentUser }: PageProps) {
 
   const income = records.filter((f) => f.type === "income").reduce((s, f) => s + f.amount, 0);
   const expenses = records.filter((f) => f.type === "expense").reduce((s, f) => s + f.amount, 0);
+  const expenseRecords = records.filter((f) => f.type === "expense");
 
-  const save = async () => {
-    if (!form.amount) return;
+  const resolvePurposeLabel = () => {
+    const { purposeType, purposeId, purposeLabel } = expenseForm;
+    if (purposeType === "service") {
+      const svc = contexts.services.find((s) => s.id === purposeId);
+      return svc?.label || purposeLabel;
+    }
+    if (purposeType === "event") {
+      const ev = contexts.events.find((e) => e.id === purposeId);
+      return ev?.label || purposeLabel;
+    }
+    if (purposeType === "cell") {
+      const cell = contexts.cells.find((c) => c.id === purposeId);
+      return cell?.label || purposeLabel;
+    }
+    return purposeLabel.trim() || PURPOSE_LABELS[purposeType];
+  };
+
+  const saveIncome = async () => {
+    if (!incomeForm.amount) return;
     await api("/finances", {
       method: "POST",
       body: JSON.stringify({
-        date: new Date().toISOString().slice(0, 10),
-        type: form.type,
-        category: form.category,
-        amount: Number(form.amount),
-        description: form.description,
-        memberId: form.memberId || null,
+        date: incomeForm.date,
+        type: "income",
+        category: incomeForm.category,
+        amount: Number(incomeForm.amount),
+        description: incomeForm.description,
+        memberId: incomeForm.memberId || null,
       }),
     });
-    setForm({ type: "income", category: "Tithe", amount: "", description: "" });
+    setIncomeForm({ category: "Tithe", amount: "", description: "", memberId: "", date: new Date().toISOString().slice(0, 10) });
     load();
   };
+
+  const saveExpense = async () => {
+    if (!expenseForm.amount) return;
+    const label = resolvePurposeLabel();
+    await api("/finances", {
+      method: "POST",
+      body: JSON.stringify({
+        date: expenseForm.date,
+        type: "expense",
+        category: expenseForm.category,
+        amount: Number(expenseForm.amount),
+        description: expenseForm.description,
+        purposeType: expenseForm.purposeType,
+        purposeId: ["service", "event", "cell"].includes(expenseForm.purposeType) ? expenseForm.purposeId || null : null,
+        purposeLabel: label,
+      }),
+    });
+    setExpenseForm({
+      date: new Date().toISOString().slice(0, 10),
+      category: "Refreshments",
+      amount: "",
+      description: "",
+      purposeType: "service",
+      purposeId: contexts.services[0]?.id || "",
+      purposeLabel: "",
+    });
+    load();
+  };
+
+  const expensesByPurpose = expenseRecords.reduce<Record<string, FinanceRecord[]>>((acc, r) => {
+    const key = r.purposeDisplay || r.purposeType || "General";
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(r);
+    return acc;
+  }, {});
 
   return (
     <div className="space-y-6">
       <PageHeader
+        {...pageHeaderProps("finances")}
         title="Finances"
         subtitle="Income, expenses, and reporting"
         action={
-          <Btn variant="accent" onClick={() => exportCSV("finances.csv", ["Date", "Type", "Category", "Amount", "Description"], records.map((f) => [f.date, f.type, f.category, String(f.amount), f.description]))}>
+          <Btn
+            variant="accent"
+            onClick={() =>
+              exportCSV(
+                "finances.csv",
+                ["Date", "Type", "Category", "Amount", "Purpose", "Description"],
+                records.map((f) => [f.date, f.type, f.category, String(f.amount), f.purposeDisplay || "", f.description || ""])
+              )
+            }
+          >
             <Download className="h-4 w-4" /> Export
           </Btn>
         }
       />
-      <div className="flex gap-2">
-        <button type="button" onClick={() => setTab("ledger")} className={cn("rounded-lg px-3 py-1 text-sm", tab === "ledger" ? "bg-[hsl(262,52%,32%)] text-white" : "bg-muted")}>Tithe Ledger</button>
-        <button type="button" onClick={() => setTab("transactions")} className={cn("rounded-lg px-3 py-1 text-sm", tab === "transactions" ? "bg-[hsl(262,52%,32%)] text-white" : "bg-muted")}>All Transactions</button>
+      <TabBar
+        tabs={[
+          { id: "ledger" as const, label: "Tithe Ledger" },
+          { id: "expenses" as const, label: "Expenses" },
+          { id: "transactions" as const, label: "All Transactions" },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
+        <StatCard label="Total Income" value={formatCurrency(income)} icon={Wallet} tone="emerald" />
+        <StatCard label="Total Expenses" value={formatCurrency(expenses)} icon={Wallet} tone="rose" />
+        <StatCard label="Balance" value={formatCurrency(income - expenses)} icon={Wallet} tone="blue" />
       </div>
-      <div className="grid gap-4 sm:grid-cols-3">
-        <StatCard label="Total Income" value={`₦${income.toLocaleString()}`} icon={Wallet} />
-        <StatCard label="Total Expenses" value={`₦${expenses.toLocaleString()}`} icon={Wallet} accent="bg-[hsl(12,85%,62%)]" />
-        <StatCard label="Balance" value={`₦${(income - expenses).toLocaleString()}`} icon={Wallet} accent="bg-[hsl(174,55%,42%)]" />
-      </div>
-      <Card>
-        <h2 className="mb-4 font-semibold">Record Transaction</h2>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Select label="Type" value={form.type} onChange={(v) => setForm((f) => ({ ...f, type: v as "income" | "expense" }))} options={[{ value: "income", label: "Income" }, { value: "expense", label: "Expense" }]} />
-          <Select label="Category" value={form.category} onChange={(v) => setForm((f) => ({ ...f, category: v }))} options={["Tithe", "Offering", "Seed", "Project Fund", "Bills", "Outreach", "Events"].map((c) => ({ value: c, label: c }))} />
-          <Select label="Member (for tithe/offering)" value={form.memberId} onChange={(v) => setForm((f) => ({ ...f, memberId: v }))} options={[{ value: "", label: "General / Anonymous" }, ...members.map((m) => ({ value: m.id, label: m.name }))]} />
-          <Input label="Amount (₦)" value={form.amount} onChange={(v) => setForm((f) => ({ ...f, amount: v }))} />
-          <Input label="Description" value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
-        </div>
-        <Btn className="mt-4" onClick={save}>Save</Btn>
-      </Card>
+
       {tab === "ledger" && (
-        <Card>
-          <h2 className="mb-4 font-semibold">Member Tithe & Offering Ledger</h2>
-          {tithes.map((t) => (
-            <div key={t.memberId || "anon"} className="mb-4 border-b pb-4 last:border-0">
-              <div className="flex justify-between font-medium">
-                <span>{t.memberName}</span>
-                <span>₦{t.total.toLocaleString()}</span>
-              </div>
-              <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
-                {t.records.map((r) => (
-                  <li key={r.id}>{r.date} — {r.category}: ₦{r.amount.toLocaleString()}</li>
-                ))}
-              </ul>
+        <>
+          <Card>
+            <h2 className="mb-4 font-semibold">Record Income</h2>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Input label="Date" type="date" value={incomeForm.date} onChange={(v) => setIncomeForm((f) => ({ ...f, date: v }))} />
+              <Select label="Category" value={incomeForm.category} onChange={(v) => setIncomeForm((f) => ({ ...f, category: v }))} options={INCOME_CATEGORIES.map((c) => ({ value: c, label: c }))} />
+              <Select label="Member (for tithe/offering)" value={incomeForm.memberId} onChange={(v) => setIncomeForm((f) => ({ ...f, memberId: v }))} options={[{ value: "", label: "General / Anonymous" }, ...members.map((m) => ({ value: m.id, label: m.name }))]} />
+              <Input label={`Amount (${CURRENCY_SYMBOL})`} value={incomeForm.amount} onChange={(v) => setIncomeForm((f) => ({ ...f, amount: v }))} />
+              <Input label="Description" value={incomeForm.description} onChange={(v) => setIncomeForm((f) => ({ ...f, description: v }))} className="sm:col-span-2" />
             </div>
-          ))}
-        </Card>
-      )}
-      {tab === "transactions" && <Card className="overflow-x-auto p-0">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/50"><tr><th className="px-4 py-2 text-left">Date</th><th className="px-4 py-2">Type</th><th className="px-4 py-2">Category</th><th className="px-4 py-2 text-right">Amount</th></tr></thead>
-          <tbody>
-            {records.map((f) => (
-              <tr key={f.id} className="border-t">
-                <td className="px-4 py-2">{f.date}</td>
-                <td className="px-4 py-2"><Badge color={f.type === "income" ? "teal" : "coral"}>{f.type}</Badge></td>
-                <td className="px-4 py-2">{f.category}</td>
-                <td className="px-4 py-2 text-right font-medium">₦{f.amount.toLocaleString()}</td>
-              </tr>
+            <Btn className="mt-4" onClick={saveIncome}>Save Income</Btn>
+          </Card>
+          <Card>
+            <h2 className="mb-4 font-semibold">Member Tithe & Offering Ledger</h2>
+            {tithes.map((t) => (
+              <div key={t.memberId || "anon"} className="mb-4 border-b pb-4 last:border-0">
+                <div className="flex justify-between font-medium">
+                  <span>{t.memberName}</span>
+                  <span>{formatCurrency(t.total)}</span>
+                </div>
+                <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
+                  {t.records.map((r) => (
+                    <li key={r.id}>{r.date} — {r.category}: {formatCurrency(r.amount)}</li>
+                  ))}
+                </ul>
+              </div>
             ))}
-          </tbody>
-        </table>
-      </Card>}
+          </Card>
+        </>
+      )}
+
+      {tab === "expenses" && (
+        <>
+          <Card>
+            <h2 className="mb-4 font-semibold">Record Expense</h2>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Input label="Date" type="date" value={expenseForm.date} onChange={(v) => setExpenseForm((f) => ({ ...f, date: v }))} />
+              <Select
+                label="Linked to"
+                value={expenseForm.purposeType}
+                onChange={(v) =>
+                  setExpenseForm((f) => ({
+                    ...f,
+                    purposeType: v as ExpensePurpose,
+                    purposeId: "",
+                    purposeLabel: "",
+                  }))
+                }
+                options={Object.entries(PURPOSE_LABELS).map(([value, label]) => ({ value, label }))}
+              />
+              {expenseForm.purposeType === "service" && (
+                <Select
+                  label="Service"
+                  value={expenseForm.purposeId}
+                  onChange={(v) => setExpenseForm((f) => ({ ...f, purposeId: v }))}
+                  options={
+                    contexts.services.length
+                      ? contexts.services.map((s) => ({ value: s.id, label: s.label }))
+                      : [{ value: "", label: "No service records — record attendance first" }]
+                  }
+                />
+              )}
+              {expenseForm.purposeType === "event" && (
+                <Select
+                  label="Event"
+                  value={expenseForm.purposeId}
+                  onChange={(v) => setExpenseForm((f) => ({ ...f, purposeId: v }))}
+                  options={
+                    contexts.events.length
+                      ? contexts.events.map((e) => ({ value: e.id, label: e.label }))
+                      : [{ value: "", label: "No events yet" }]
+                  }
+                />
+              )}
+              {expenseForm.purposeType === "cell" && (
+                <Select
+                  label="Cell"
+                  value={expenseForm.purposeId}
+                  onChange={(v) => setExpenseForm((f) => ({ ...f, purposeId: v }))}
+                  options={contexts.cells.map((c) => ({ value: c.id, label: c.label }))}
+                />
+              )}
+              {(expenseForm.purposeType === "outreach" || expenseForm.purposeType === "general" || expenseForm.purposeType === "other") && (
+                <Input
+                  label="Purpose label"
+                  value={expenseForm.purposeLabel}
+                  onChange={(v) => setExpenseForm((f) => ({ ...f, purposeLabel: v }))}
+                  placeholder={expenseForm.purposeType === "outreach" ? "e.g. Street evangelism" : "e.g. Office supplies"}
+                />
+              )}
+              <Select label="Category" value={expenseForm.category} onChange={(v) => setExpenseForm((f) => ({ ...f, category: v }))} options={EXPENSE_CATEGORIES.map((c) => ({ value: c, label: c }))} />
+              <Input label={`Amount (${CURRENCY_SYMBOL})`} value={expenseForm.amount} onChange={(v) => setExpenseForm((f) => ({ ...f, amount: v }))} />
+              <Input label="Description" value={expenseForm.description} onChange={(v) => setExpenseForm((f) => ({ ...f, description: v }))} className="sm:col-span-2" />
+            </div>
+            <Btn className="mt-4" variant="highlight" onClick={saveExpense}>Save Expense</Btn>
+          </Card>
+
+          <Card>
+            <h2 className="mb-4 font-semibold">Expense Records</h2>
+            {expenseRecords.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No expenses recorded yet.</p>
+            ) : (
+              <div className="space-y-6">
+                {Object.entries(expensesByPurpose).map(([purpose, items]) => {
+                  const subtotal = items.reduce((s, r) => s + r.amount, 0);
+                  return (
+                    <div key={purpose}>
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Badge color="coral">{purpose}</Badge>
+                          <span className="text-sm text-muted-foreground">{items.length} item{items.length !== 1 ? "s" : ""}</span>
+                        </div>
+                        <span className="font-semibold text-highlight">{formatCurrency(subtotal)}</span>
+                      </div>
+                      <div className="space-y-2">
+                        {items.map((f) => (
+                          <div key={f.id} className="flex items-start justify-between gap-3 rounded-lg bg-muted/40 px-3 py-2.5 text-sm">
+                            <div className="min-w-0">
+                              <p className="font-medium">{f.category}</p>
+                              <p className="text-xs text-muted-foreground">{f.date}{f.description ? ` · ${f.description}` : ""}</p>
+                            </div>
+                            <p className="shrink-0 font-semibold">{formatCurrency(f.amount)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+        </>
+      )}
+
+      {tab === "transactions" && (
+        <>
+          <div className="space-y-3 md:hidden">
+            {records.map((f) => (
+              <Card key={f.id} className="p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-medium">{f.category}</p>
+                    <p className="text-xs text-muted-foreground">{f.date}</p>
+                    {f.purposeDisplay && <p className="mt-1 text-xs text-muted-foreground">{f.purposeDisplay}</p>}
+                    {f.description && <p className="text-xs text-muted-foreground">{f.description}</p>}
+                  </div>
+                  <div className="text-right">
+                    <p className="font-semibold">{formatCurrency(f.amount)}</p>
+                    <Badge color={f.type === "income" ? "teal" : "coral"}>{f.type}</Badge>
+                  </div>
+                </div>
+              </Card>
+            ))}
+            {records.length === 0 && <Card><p className="text-sm text-muted-foreground">No transactions yet</p></Card>}
+          </div>
+          <Card className="hidden overflow-x-auto p-0 md:block">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50">
+                <tr>
+                  <th className="px-4 py-2 text-left">Date</th>
+                  <th className="px-4 py-2">Type</th>
+                  <th className="px-4 py-2">Category</th>
+                  <th className="px-4 py-2">Purpose</th>
+                  <th className="px-4 py-2 text-right">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {records.map((f) => (
+                  <tr key={f.id} className="border-t">
+                    <td className="px-4 py-2">{f.date}</td>
+                    <td className="px-4 py-2"><Badge color={f.type === "income" ? "teal" : "coral"}>{f.type}</Badge></td>
+                    <td className="px-4 py-2">{f.category}</td>
+                    <td className="px-4 py-2 text-muted-foreground">{f.purposeDisplay || "—"}</td>
+                    <td className="px-4 py-2 text-right font-medium">{formatCurrency(f.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </>
+      )}
     </div>
   );
 }
@@ -1250,7 +2252,7 @@ export function PrayerPage({ members, currentUser }: PageProps) {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Prayer Requests" subtitle="Submit and track prayer needs" />
+      <PageHeader {...pageHeaderProps("prayer")} title="Prayer Requests" subtitle="Submit and track prayer needs" />
       <Card>
         <h2 className="mb-4 font-semibold">Submit Request</h2>
         <div className="space-y-3">
@@ -1272,7 +2274,7 @@ export function PrayerPage({ members, currentUser }: PageProps) {
               </h3>
               <p className="text-sm text-muted-foreground">{memberName(members, p.memberId)} · {p.createdAt}</p>
               <p className="mt-2">{p.content}</p>
-              {p.response && <p className="mt-2 text-sm text-[hsl(174,55%,42%)]">Response: {p.response}</p>}
+              {p.response && <p className="mt-2 text-sm text-accent">Response: {p.response}</p>}
             </div>
             {!isMember && (
               <div className="flex gap-2">
@@ -1337,7 +2339,7 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Discipleship & Follow-up" subtitle="Track visitors and new converts" action={<Btn onClick={() => setAddModal(true)}><Plus className="h-4 w-4" /> Add</Btn>} />
+      <PageHeader {...pageHeaderProps("discipleship")} title="Discipleship & Follow-up" subtitle="Track visitors and new converts" action={<Btn onClick={() => setAddModal(true)}><Plus className="h-4 w-4" /> Add</Btn>} />
       {followUps.map((fu) => (
         <Card key={fu.id}>
           <div className="flex flex-wrap justify-between gap-2">
@@ -1353,7 +2355,7 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
             </div>
           </div>
           {fu.notes.map((n, i) => (
-            <p key={i} className="mt-2 border-l-2 border-[hsl(174,55%,42%)] pl-3 text-sm">{n.date}: {n.text} — <em>{n.outcome}</em></p>
+            <p key={i} className="mt-2 border-l-2 border-accent pl-3 text-sm">{n.date}: {n.text} — <em>{n.outcome}</em></p>
           ))}
         </Card>
       ))}
@@ -1433,11 +2435,11 @@ export function AnnouncementsPage({ cells, fellowships, departments, currentUser
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Announcements" subtitle="Targeted church notices" action={canPost ? <Btn onClick={() => setModal(true)}><Plus className="h-4 w-4" /> Post</Btn> : undefined} />
+      <PageHeader {...pageHeaderProps("announcements")} title="Announcements" subtitle="Targeted church notices" action={canPost ? <Btn onClick={() => setModal(true)}><Plus className="h-4 w-4" /> Post</Btn> : undefined} />
       {announcements.map((a) => (
-        <Card key={a.id} className={a.pinned ? "border-[hsl(12,85%,62%)]" : ""}>
+        <Card key={a.id} className={a.pinned ? "border-highlight" : ""}>
           <div className="flex flex-wrap items-start gap-2">
-            {a.pinned && <Pin className="h-4 w-4 text-[hsl(12,85%,62%)]" />}
+            {a.pinned && <Pin className="h-4 w-4 text-highlight" />}
             <div className="flex-1">
               <h3 className="font-semibold">{a.title}</h3>
               <Badge color="teal" className="mt-1">{targetLabel(a)}</Badge>
@@ -1525,7 +2527,7 @@ export function TasksPage({ members, departments, currentUser }: PageProps) {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Tasks & Assignments" subtitle="Ministry tasks with notifications" action={canCreate ? <Btn onClick={() => setModal(true)}><Plus className="h-4 w-4" /> New Task</Btn> : undefined} />
+      <PageHeader {...pageHeaderProps("tasks")} title="Tasks & Assignments" subtitle="Ministry tasks with notifications" action={canCreate ? <Btn onClick={() => setModal(true)}><Plus className="h-4 w-4" /> New Task</Btn> : undefined} />
       {tasks.map((t) => (
         <Card key={t.id}>
           <div className="flex flex-wrap justify-between gap-2">
@@ -1540,7 +2542,7 @@ export function TasksPage({ members, departments, currentUser }: PageProps) {
             <div className="flex items-center gap-2">
               <Badge color={t.priority === "high" ? "coral" : t.priority === "medium" ? "teal" : "gray"}>{t.priority}</Badge>
               <button type="button" onClick={() => toggleStatus(t)}>
-                {t.status === "completed" ? <CheckCircle2 className="h-5 w-5 text-[hsl(174,55%,42%)]" /> : <Circle className="h-5 w-5" />}
+                {t.status === "completed" ? <CheckCircle2 className="h-5 w-5 text-accent" /> : <Circle className="h-5 w-5" />}
               </button>
             </div>
           </div>
@@ -1627,6 +2629,7 @@ export function MediaPage({ currentUser }: PageProps) {
   return (
     <div className="space-y-6">
       <PageHeader
+        {...pageHeaderProps("media")}
         title="Media Library"
         subtitle="Sermons, notes, and teaching resources"
         action={canUploadMedia(currentUser.role) ? <Btn onClick={() => setUploadOpen(true)}><Upload className="h-4 w-4" /> Upload</Btn> : undefined}
@@ -1636,12 +2639,12 @@ export function MediaPage({ currentUser }: PageProps) {
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search sermons..." className="w-full rounded-lg border py-2 pl-10 pr-3 text-sm" />
       </div>
       <div className="grid gap-4 md:grid-cols-2">
-        {media.map((m) => (
+        {media.map((m) => {
+          const mediaTone = m.type === "video" ? "rose" as IconTone : m.type === "audio" ? "violet" as IconTone : "indigo" as IconTone;
+          return (
           <Card key={m.id}>
             <div className="flex gap-4">
-              <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-[hsl(262,52%,32%)]/10">
-                {m.type === "video" ? <Play className="h-6 w-6 text-[hsl(262,52%,32%)]" /> : <FileText className="h-6 w-6" />}
-              </div>
+              <IconBox icon={m.type === "video" || m.type === "audio" ? Play : FileText} tone={mediaTone} size="lg" className="h-14 w-14 rounded-xl" />
               <div>
                 <h3 className="font-semibold">{m.title}</h3>
                 <p className="text-sm text-muted-foreground">{m.speaker} · {m.series}</p>
@@ -1653,7 +2656,7 @@ export function MediaPage({ currentUser }: PageProps) {
                         <Play className="h-3 w-3" /> Play
                       </Btn>
                     )}
-                    <a href={m.fileUrl} download className="inline-flex items-center gap-1 text-sm text-[hsl(174,55%,42%)]">
+                    <a href={m.fileUrl} download className="inline-flex items-center gap-1 text-sm text-accent">
                       <Download className="h-4 w-4" /> Download
                     </a>
                   </div>
@@ -1661,7 +2664,8 @@ export function MediaPage({ currentUser }: PageProps) {
               </div>
             </div>
           </Card>
-        ))}
+        );
+        })}
       </div>
       <Modal open={uploadOpen} onClose={() => setUploadOpen(false)} title="Upload Media">
         <div className="space-y-3">
@@ -1765,7 +2769,7 @@ export function ReportSubmissionsPage({ members, cells, departments, currentUser
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Report Submissions" subtitle="Cell, fellowship, and department reports" />
+      <PageHeader {...pageHeaderProps("report-submissions")} title="Report Submissions" subtitle="Cell, fellowship, and department reports" />
       {canSubmit && (
         <Card>
           <h2 className="mb-4 font-semibold">Submit {reportType} report</h2>
@@ -1789,7 +2793,7 @@ export function ReportSubmissionsPage({ members, cells, departments, currentUser
               <p className="mt-2 text-sm">Attendance: {r.attendanceCount} · Visitors: {r.newVisitors}</p>
               <p className="text-sm">Prayer: {r.prayerPoints}</p>
               <p className="text-sm">Challenges: {r.challenges}</p>
-              {r.pastorComment && <p className="mt-2 text-sm text-[hsl(174,55%,42%)]">Pastor: {r.pastorComment}</p>}
+              {r.pastorComment && <p className="mt-2 text-sm text-accent">Pastor: {r.pastorComment}</p>}
             </div>
             <Badge color={r.status === "approved" ? "teal" : r.status === "overdue" ? "coral" : "purple"}>{r.status}</Badge>
           </div>
