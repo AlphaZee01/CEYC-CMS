@@ -1,13 +1,11 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
-import {
-  Bell,
-  LogOut,
-  X,
-} from "lucide-react";
-import { Badge, IconBox, cn } from "@/components/church/ui";
+import { useNavigate } from "react-router-dom";
+import { Bell, LogOut, Menu, X } from "lucide-react";
+import { memberProfilePath } from "@/lib/rbac";
+import { Badge, AvatarCircle, cn } from "@/components/church/ui";
 import { PAGE_META, type PageId, type Member } from "@/types/church";
 import { PAGE_ICONS } from "@/lib/page-icons";
-import { PAGE_ICON_TONES } from "@/lib/icon-colors";
+import { ICON_TONES, PAGE_ICON_TONES } from "@/lib/icon-colors";
 import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { MobileBottomNav, MOBILE_NAV_PRIORITY } from "@/components/church/MobileBottomNav";
@@ -31,8 +29,21 @@ export interface AppLayoutProps {
   settings: { name: string; logoUrl?: string; tagline?: string };
 }
 
+const NAV_GROUPS: { label: string; ids: PageId[] }[] = [
+  { label: "Overview", ids: ["dashboard", "reports"] },
+  { label: "People", ids: ["members", "cells", "departments", "attendance"] },
+  { label: "Ministry", ids: ["events", "prayer", "discipleship", "announcements", "tasks", "report-submissions"] },
+  { label: "Operations", ids: ["communications", "finances", "media"] },
+  { label: "Admin", ids: ["settings"] },
+];
+
+function pageLabel(id: PageId) {
+  return PAGE_META.find((p) => p.id === id)?.label ?? id;
+}
+
 export function AppLayout({ activePage, onNavigate, pages, children, user, settings }: AppLayoutProps) {
   const { logout } = useAuth();
+  const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -59,7 +70,6 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
     return () => document.removeEventListener("mousedown", handleClick);
   }, [notificationsOpen]);
 
-  const visiblePages = PAGE_META.filter((p) => pages.includes(p.id));
   const unreadCount = notifications.filter((n) => !n.read).length;
   const mobileNavItems = MOBILE_NAV_PRIORITY.filter((p) => pages.includes(p)).slice(0, 4);
   const moreNavActive = sidebarOpen || !mobileNavItems.includes(activePage);
@@ -79,26 +89,51 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
   };
 
   const isChatPage = activePage === "communications";
-  const userInitials = user.name
-    .split(" ")
-    .map((p) => p[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+
+  const navGroups = NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.ids.filter((id) => pages.includes(id)),
+  })).filter((g) => g.items.length > 0);
+
+  const renderNavItem = (id: PageId) => {
+    const Icon = PAGE_ICONS[id];
+    const tone = PAGE_ICON_TONES[id];
+    const t = ICON_TONES[tone];
+    const active = activePage === id;
+    return (
+      <button
+        key={id}
+        type="button"
+        onClick={() => handleNavigate(id)}
+        className={cn(
+          "group flex w-full min-h-[40px] items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-all duration-150",
+          active
+            ? "bg-primary text-primary-foreground shadow-sm shadow-primary/20"
+            : "text-muted-foreground hover:bg-muted hover:text-foreground"
+        )}
+      >
+        <Icon
+          className={cn("h-[18px] w-[18px] shrink-0", active ? "text-primary-foreground" : t.icon)}
+          strokeWidth={active ? 2.25 : 2}
+        />
+        <span className="truncate">{pageLabel(id)}</span>
+      </button>
+    );
+  };
 
   return (
     <div className="flex h-[100dvh] overflow-hidden bg-background">
       {sidebarOpen && (
-        <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => setSidebarOpen(false)} aria-hidden />
+        <div className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm lg:hidden" onClick={() => setSidebarOpen(false)} aria-hidden />
       )}
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-[min(18rem,85vw)] flex-col overflow-hidden bg-[hsl(var(--sidebar-background))] text-[hsl(var(--sidebar-foreground))] transition-transform lg:static lg:h-full lg:w-64 lg:shrink-0 lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-50 flex w-[min(17rem,88vw)] flex-col border-r border-border bg-[hsl(var(--sidebar-background))] transition-transform duration-200 lg:static lg:h-full lg:w-64 lg:shrink-0 lg:translate-x-0",
           sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
       >
-        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[hsl(var(--sidebar-border))] p-4 pt-safe sm:p-5">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-4 pt-safe lg:px-5">
           <ChurchBrand
             name={settings.name}
             logoUrl={settings.logoUrl}
@@ -107,62 +142,66 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
             theme="sidebar"
             className="min-w-0 flex-1"
           />
-          <button type="button" className="touch-target flex items-center justify-center rounded-lg hover:bg-[hsl(var(--sidebar-accent))] lg:hidden" onClick={() => setSidebarOpen(false)} aria-label="Close menu">
+          <button
+            type="button"
+            className="touch-target flex items-center justify-center rounded-xl text-muted-foreground hover:bg-muted lg:hidden"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Close menu"
+          >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain p-3 lg:sidebar-scroll">
-          {visiblePages.map(({ id, label }) => {
-            const Icon = PAGE_ICONS[id];
-            const tone = PAGE_ICON_TONES[id];
-            const active = activePage === id;
-            return (
-              <button
-                key={id}
-                type="button"
-                onClick={() => handleNavigate(id)}
-                className={cn(
-                  "flex w-full min-h-[44px] items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition",
-                  active
-                    ? "bg-[hsl(var(--sidebar-primary))] text-white shadow-sm"
-                    : "hover:bg-[hsl(var(--sidebar-accent))]"
-                )}
-              >
-                {active ? (
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/15">
-                    <Icon className="h-4 w-4 shrink-0" strokeWidth={2.25} />
-                  </span>
-                ) : (
-                  <IconBox icon={Icon} tone={tone} size="sm" variant="solid" />
-                )}
-                <span className="truncate">{label}</span>
-              </button>
-            );
-          })}
+        <nav className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-3 py-4 lg:sidebar-scroll">
+          {navGroups.map((group) => (
+            <div key={group.label}>
+              <p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">
+                {group.label}
+              </p>
+              <div className="space-y-0.5">{group.items.map(renderNavItem)}</div>
+            </div>
+          ))}
         </nav>
 
-        <div className="shrink-0 border-t border-[hsl(var(--sidebar-border))] p-4 pb-safe text-xs opacity-60 lg:pb-4">Christ Embassy LCM v1.0</div>
+        <div className="shrink-0 border-t border-border p-4 pb-safe lg:pb-4">
+          <button
+            type="button"
+            onClick={() => navigate(memberProfilePath(user.id))}
+            className="flex w-full items-center gap-3 rounded-xl bg-muted/50 p-3 text-left transition hover:bg-muted"
+          >
+            <AvatarCircle name={user.name} size="sm" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold text-foreground">{user.name}</p>
+              <p className="truncate text-xs text-muted-foreground">{user.role}</p>
+            </div>
+          </button>
+        </div>
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="z-30 shrink-0 border-b border-white/10 bg-gradient-to-r from-[hsl(var(--sidebar-accent))] via-primary to-[hsl(var(--sidebar-background))] text-white shadow-lg pt-safe">
-          <div className="flex items-center gap-3 px-4 py-3 sm:px-5">
-            <div className="flex min-w-0 flex-1 items-center gap-3">
-              <ChurchBrand
-                name={settings.name}
-                logoUrl={settings.logoUrl}
-                tagline={settings.tagline}
-                size="md"
-                theme="header"
-              />
+        <header className="z-30 shrink-0 border-b border-border bg-card/80 pt-safe backdrop-blur-md">
+          <div className="flex items-center gap-3 px-4 py-3 sm:px-6">
+            <button
+              type="button"
+              className="touch-target flex items-center justify-center rounded-xl text-muted-foreground hover:bg-muted lg:hidden"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="Open menu"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-base font-semibold text-foreground lg:hidden">{pageLabel(activePage)}</p>
+              <p className="hidden truncate text-sm text-muted-foreground lg:block">
+                Welcome back, <span className="font-medium text-foreground">{user.name.split(" ")[0]}</span>
+              </p>
             </div>
 
-            <div className="flex items-center gap-1 sm:gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2">
               <div ref={notificationsRef} className="relative">
                 <button
                   type="button"
-                  className="touch-target relative flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 transition hover:bg-white/20"
+                  className="touch-target relative flex h-10 w-10 items-center justify-center rounded-xl text-muted-foreground transition hover:bg-muted hover:text-foreground"
                   onClick={() => {
                     setNotificationsOpen((o) => !o);
                     if (!notificationsOpen && unreadCount > 0) markAllRead();
@@ -171,30 +210,28 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
                 >
                   <Bell className="h-5 w-5" />
                   {unreadCount > 0 && (
-                    <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white ring-2 ring-primary">
-                      {unreadCount > 9 ? "9+" : unreadCount}
-                    </span>
+                    <span className="absolute right-1.5 top-1.5 flex h-2 w-2 rounded-full bg-primary ring-2 ring-card" />
                   )}
                 </button>
                 {notificationsOpen && (
-                  <div className="fixed inset-x-3 top-[calc(env(safe-area-inset-top)+4rem)] z-50 max-h-[min(24rem,60dvh)] overflow-y-auto rounded-2xl border bg-card p-3 text-foreground shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-80">
-                    <div className="mb-2 flex items-center justify-between">
-                      <p className="text-sm font-semibold text-primary">Notifications</p>
+                  <div className="fixed inset-x-3 top-[calc(env(safe-area-inset-top)+3.5rem)] z-50 max-h-[min(24rem,60dvh)] overflow-y-auto rounded-2xl border border-border bg-card p-3 shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-80">
+                    <div className="mb-3 flex items-center justify-between">
+                      <p className="text-sm font-semibold">Notifications</p>
                       {unreadCount > 0 && (
-                        <button type="button" className="text-xs font-medium text-accent" onClick={markAllRead}>
+                        <button type="button" className="text-xs font-medium text-primary hover:underline" onClick={markAllRead}>
                           Mark all read
                         </button>
                       )}
                     </div>
                     {notifications.length === 0 ? (
-                      <p className="py-4 text-center text-xs text-muted-foreground">No notifications</p>
+                      <p className="py-8 text-center text-sm text-muted-foreground">You&apos;re all caught up</p>
                     ) : (
                       <ul className="space-y-2">
                         {notifications.slice(0, 10).map((n) => (
-                          <li key={n.id} className={cn("rounded-xl border p-3 text-xs", !n.read && "bg-muted/50")}>
+                          <li key={n.id} className={cn("rounded-xl border border-border/80 p-3 text-sm", !n.read && "bg-primary/5")}>
                             <p className="font-medium">{n.title}</p>
-                            <p className="text-muted-foreground">{n.body}</p>
-                            <p className="mt-1 text-[10px] text-muted-foreground">{n.createdAt}</p>
+                            <p className="mt-0.5 text-muted-foreground">{n.body}</p>
+                            <p className="mt-2 text-xs text-muted-foreground/80">{n.createdAt}</p>
                           </li>
                         ))}
                       </ul>
@@ -203,22 +240,13 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
                 )}
               </div>
 
-              <div className="hidden h-8 w-px bg-white/20 sm:block" aria-hidden />
-
               <div className="hidden items-center gap-2 sm:flex">
-                <div className="hidden text-right md:block">
-                  <p className="max-w-[10rem] truncate text-sm font-medium">{user.name}</p>
-                  <Badge color="blue" className="mt-0.5 bg-white/15 text-white">{user.role}</Badge>
-                </div>
-              </div>
-
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/20 text-sm font-semibold ring-2 ring-white/30">
-                {userInitials}
+                <Badge color="blue">{user.role}</Badge>
               </div>
 
               <button
                 type="button"
-                className="touch-target flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 text-white/90 transition hover:bg-white/20 hover:text-white"
+                className="touch-target flex h-10 w-10 items-center justify-center rounded-xl text-muted-foreground transition hover:bg-muted hover:text-destructive"
                 onClick={logout}
                 aria-label="Log out"
               >
@@ -230,11 +258,11 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
 
         <main
           className={cn(
-            "min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 pb-[calc(5.75rem+env(safe-area-inset-bottom))] sm:p-4 md:p-6 lg:pb-8 lg:p-8",
-            isChatPage && "p-0 pb-[calc(5.75rem+env(safe-area-inset-bottom))] lg:p-8"
+            "min-h-0 flex-1 overscroll-contain lg:pb-8",
+            isChatPage ? "overflow-hidden p-0 pb-mobile-nav" : "overflow-y-auto p-4 pb-mobile-nav sm:p-6 lg:p-8"
           )}
         >
-          {children}
+          <div className={cn(isChatPage ? "h-full min-h-0" : "page-shell")}>{children}</div>
         </main>
 
         <MobileBottomNav

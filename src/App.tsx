@@ -7,6 +7,7 @@ import { DashboardSkeleton, AppShellSkeleton } from "@/components/church/skeleto
 import {
   DashboardPage,
   MembersPage,
+  MemberProfilePage,
   CellsPage,
   DepartmentsPage,
   AttendancePage,
@@ -25,10 +26,17 @@ import {
 import type { PageId, Member, Cell, Fellowship, Department, Role } from "@/types/church";
 import { PAGE_META } from "@/types/church";
 import { useEffect } from "react";
+import { Toaster } from "sonner";
 
 const PAGE_IDS = new Set<PageId>(PAGE_META.map((p) => p.id));
 
+function memberIdFromPath(pathname: string): string | null {
+  const match = pathname.match(/^\/app\/members\/([^/]+)/);
+  return match?.[1] ?? null;
+}
+
 function pageFromPath(pathname: string): PageId {
+  if (memberIdFromPath(pathname)) return "members";
   const segment = pathname.replace(/^\/app\/?/, "").split("/")[0];
   if (segment && PAGE_IDS.has(segment as PageId)) return segment as PageId;
   return "dashboard";
@@ -48,13 +56,20 @@ function ChurchApp() {
   const location = useLocation();
   const navigate = useNavigate();
   const activePage = pageFromPath(location.pathname);
+  const profileMemberId = memberIdFromPath(location.pathname);
 
   useEffect(() => {
-    if (!pages.length) return;
+    if (!pages.length || !user) return;
+    if (profileMemberId) {
+      if (profileMemberId !== user.member.id && !pages.includes("members")) {
+        navigate(pageToPath(pages[0]), { replace: true });
+      }
+      return;
+    }
     if (!pages.includes(activePage)) {
       navigate(pageToPath(pages[0]), { replace: true });
     }
-  }, [pages, activePage, navigate]);
+  }, [pages, activePage, profileMemberId, navigate, user]);
 
   const setActivePage = (page: PageId) => {
     navigate(pageToPath(page));
@@ -93,6 +108,9 @@ function ChurchApp() {
   };
 
   const renderPage = () => {
+    if (profileMemberId) {
+      return <MemberProfilePage memberId={profileMemberId} {...props} />;
+    }
     switch (activePage) {
       case "dashboard": return <DashboardPage {...props} />;
       case "members": return <MembersPage {...props} />;
@@ -140,6 +158,7 @@ export default function App() {
   return (
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AuthProvider>
+        <Toaster richColors position="top-center" closeButton />
         <Routes>
           <Route path="/" element={<LoginPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />

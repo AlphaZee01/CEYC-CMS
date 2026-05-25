@@ -1,8 +1,8 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { api, authApi, setToken } from "@/lib/api";
+import { loadAuthMode, useSupabaseForAuth } from "@/lib/auth-mode";
 import {
   supabase,
-  supabaseConfigured,
   signInWithEmail,
   signOutSupabase,
   clearStaleSupabaseSession,
@@ -38,6 +38,17 @@ function applyBranding(
   cacheBranding(next);
 }
 
+function applySession(
+  setUser: (u: AuthUser | null) => void,
+  setPages: (p: PageId[]) => void,
+  setBranding: (b: ChurchBranding) => void,
+  data: { user: unknown; pages: string[]; branding?: { name: string; tagline?: string; logoUrl?: string | null } }
+) {
+  setUser(data.user as AuthUser);
+  setPages(data.pages as PageId[]);
+  applyBranding(setBranding, data.branding);
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [pages, setPages] = useState<PageId[]>([]);
@@ -49,7 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setPages([]);
     setToken(null);
-    if (supabaseConfigured) await clearStaleSupabaseSession();
+    if (useSupabaseForAuth()) await clearStaleSupabaseSession();
   }, []);
 
   const refresh = useCallback(async () => {
@@ -58,9 +69,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshPromiseRef.current = (async () => {
       try {
         const data = await authLogTimed("GET /api/auth/me", () => authApi.me());
-        setUser(data.user as AuthUser);
-        setPages(data.pages as PageId[]);
-        applyBranding(setBranding, data.branding);
+        applySession(setUser, setPages, setBranding, data);
         authLog("Session loaded", (data.user as AuthUser)?.member?.email);
       } catch (err) {
         const message = err instanceof Error ? err.message : "";
@@ -71,7 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(null);
           setPages([]);
           setToken(null);
-          if (supabaseConfigured) await signOutSupabase({ local: true });
+          if (useSupabaseForAuth()) await signOutSupabase({ local: true });
         }
       }
     })();
@@ -88,7 +97,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const init = async () => {
       try {
-        if (supabaseConfigured && supabase) {
+        const mode = await loadAuthMode();
+        authLog("Auth mode from server", mode);
+
+        if (mode === "supabase" && supabase) {
           const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
             if (!mounted) return;
             authLog(`Supabase auth: ${event}`, session ? "has session" : "no session");
@@ -108,8 +120,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               return;
             }
 
-            if (session && (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")) {
-              if (event === "SIGNED_IN") await refresh();
+            if (session && event === "TOKEN_REFRESHED") {
+              await refresh();
             }
 
             if (!session) {
@@ -138,12 +150,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string) => {
     authLogStart(`Sign-in: ${email}`);
-    if (supabaseConfigured) {
+
+    if (useSupabaseForAuth()) {
       await authLogTimed("Supabase signInWithPassword", () => signInWithEmail(email, password));
-      await refresh();
+      const data = await authLogTimed("GET /api/auth/me", () => authApi.me());
+      applySession(setUser, setPages, setBranding, data);
       authLog("Sign-in complete");
       return;
     }
+
     const { token, user: u } = await authLogTimed("POST /api/auth/login", () => authApi.login(email, password));
     setToken(token);
     setUser(u as AuthUser);
@@ -154,7 +169,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
-    if (supabaseConfigured) await signOutSupabase();
+    if (useSupabaseForAuth()) await signOutSupabase();
     setToken(null);
     setUser(null);
     setPages([]);

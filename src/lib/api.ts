@@ -1,4 +1,5 @@
-import { getSupabaseAccessToken, supabaseConfigured } from "@/lib/supabase";
+import { getSupabaseAccessToken } from "@/lib/supabase";
+import { useSupabaseForAuth } from "@/lib/auth-mode";
 import { authLog } from "@/lib/auth-log";
 
 const API_BASE = "/api";
@@ -10,6 +11,11 @@ function getLegacyToken() {
 export function setToken(token: string | null) {
   if (token) localStorage.setItem("celcm_token", token);
   else localStorage.removeItem("celcm_token");
+}
+
+function isLoginRoute() {
+  const path = window.location.pathname;
+  return path === "/" || path === "/reset-password";
 }
 
 export async function publicApi<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -37,7 +43,7 @@ export async function api<T>(
   }
 
   let token: string | null = null;
-  if (supabaseConfigured) {
+  if (useSupabaseForAuth()) {
     token = await getSupabaseAccessToken();
     if (token) authLog("Supabase access token ready");
   } else {
@@ -46,26 +52,31 @@ export async function api<T>(
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
-  if (res.status === 401) {
-    if (!supabaseConfigured) setToken(null);
-    else {
-      const { clearStaleSupabaseSession } = await import("@/lib/supabase");
-      await clearStaleSupabaseSession();
-    }
-    if (!window.location.pathname.startsWith("/app")) {
-      throw new Error("Session expired");
-    }
-    window.location.href = "/";
-    throw new Error("Session expired");
-  }
   const data = await res.json().catch(() => ({}));
+
+  if (res.status === 401) {
+    const message = (data.error as string) || "Session expired";
+    if (!isLoginRoute()) {
+      if (!useSupabaseForAuth()) setToken(null);
+      else {
+        const { clearStaleSupabaseSession } = await import("@/lib/supabase");
+        await clearStaleSupabaseSession();
+      }
+      if (!window.location.pathname.startsWith("/app")) {
+        throw new Error(message);
+      }
+      window.location.href = "/";
+    }
+    throw new Error(message);
+  }
+
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data as T;
 }
 
 export const authApi = {
   login: (email: string, password: string) =>
-    api<{ token: string; user: unknown }>("/auth/login", {
+    publicApi<{ token: string; user: unknown }>("/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     }),

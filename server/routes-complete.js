@@ -6,6 +6,7 @@ import {
   canAccessFinances,
   canManageSettings,
   resolveUserPages,
+  canManageEvents,
 } from "./rbac.js";
 import { logAudit } from "./audit.js";
 import { updateSupabaseAuthPassword } from "./auth-sync.js";
@@ -128,6 +129,9 @@ export function registerCompletionRoutes(app, { upload, uid, getMemberDepartment
   });
 
   app.delete("/api/events/:id", authMiddleware, async (req, res) => {
+    if (!canManageEvents(req.user.member.role)) {
+      return res.status(403).json({ error: "You cannot delete church events" });
+    }
     await getDb().prepare("DELETE FROM events WHERE id = ?").run(req.params.id);
     await logAudit(req.user.member.id, "delete", "event", req.params.id);
     res.json({ ok: true });

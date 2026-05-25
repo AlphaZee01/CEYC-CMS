@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getDb, usePostgres } from "./store.js";
+import { getDb } from "./store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(__dirname, "..", "data", "church.db");
@@ -25,23 +25,6 @@ function uid() {
 }
 
 async function clearAll(db) {
-  const tables = [
-    "notifications", "activities", "cell_reports", "media_items", "task_assignees", "tasks",
-    "announcements", "follow_up_notes", "follow_ups", "prayer_requests", "finances",
-    "message_recipients", "messages", "event_rsvps", "events", "attendance_members",
-    "attendance_records", "member_departments", "departments", "cells", "fellowships", "users",
-    "members", "church_settings", "password_reset_tokens", "audit_log",
-  ];
-  if (usePostgres) {
-    for (const t of tables) {
-      try {
-        await db.exec(`DELETE FROM ${t}`);
-      } catch {
-        /* table may be empty */
-      }
-    }
-    return;
-  }
   await db.exec(`
     DELETE FROM notifications; DELETE FROM activities; DELETE FROM cell_reports;
     DELETE FROM media_items; DELETE FROM task_assignees; DELETE FROM tasks;
@@ -56,18 +39,16 @@ async function clearAll(db) {
 }
 
 export async function seedDatabase(reset = false) {
-  if (reset && !usePostgres && fs.existsSync(DB_PATH)) {
-    fs.unlinkSync(DB_PATH);
-    console.log("Removed SQLite database file.");
+  if (reset && fs.existsSync(DB_PATH)) {
     const { resetDbConnection } = await import("./db.js");
     const { resetSqliteConnection } = await import("./store.js");
     resetDbConnection();
     resetSqliteConnection();
+    fs.unlinkSync(DB_PATH);
+    console.log("Removed SQLite database file.");
   }
-  if (!usePostgres) {
-    const { initSchema } = await import("./db.js");
-    initSchema();
-  }
+  const { initSchema } = await import("./db.js");
+  initSchema();
 
   const db = getDb();
   const countRow = await db.prepare("SELECT COUNT(*) as c FROM members").get();
@@ -81,11 +62,7 @@ export async function seedDatabase(reset = false) {
 
   const hash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
 
-  const settingsSql = usePostgres
-    ? `INSERT INTO church_settings (id, name, tagline, address, phone, email, logo_url)
-       VALUES (1, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, tagline=EXCLUDED.tagline, address=EXCLUDED.address, phone=EXCLUDED.phone, email=EXCLUDED.email`
-    : `INSERT OR REPLACE INTO church_settings (id, name, tagline, address, phone, email, logo_url) VALUES (1, ?, ?, ?, ?, ?, ?)`;
+  const settingsSql = `INSERT OR REPLACE INTO church_settings (id, name, tagline, address, phone, email, logo_url) VALUES (1, ?, ?, ?, ?, ?, ?)`;
 
   await db.prepare(settingsSql).run(
     "Christ Embassy Lagos Zone",
@@ -134,7 +111,7 @@ export async function seedDatabase(reset = false) {
 
   const insM = db.prepare(
     `INSERT INTO members (id, name, email, phone, role, cell_id, fellowship_id, active, joined_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ${usePostgres ? "TRUE" : "1"}, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`
   );
   const insU = db.prepare(
     `INSERT INTO users (id, email, password_hash, member_id, access_level) VALUES (?, ?, ?, ?, ?)`
@@ -161,6 +138,8 @@ export async function seedDatabase(reset = false) {
   await db.prepare("UPDATE cells SET leader_id = ? WHERE id = ?").run("m9", "c3");
   await db.prepare("UPDATE cells SET leader_id = ? WHERE id = ?").run("m10", "c4");
   await db.prepare("UPDATE departments SET head_id = ? WHERE id = ?").run("m2", "d1");
+  await db.prepare("UPDATE departments SET head_id = ? WHERE id = ?").run("m7", "d6");
+  await insMD.run("m7", "d6");
 
   for (let i = 0; i < 15; i++) {
     const id = `m${11 + i}`;
@@ -175,7 +154,7 @@ export async function seedDatabase(reset = false) {
   const { logActivity } = await import("./db.js");
   await logActivity(null, "System initialized with seed data", "m1");
   await ensureDashboardSamples(db);
-  console.log(`Seeded ${usePostgres ? "PostgreSQL" : "SQLite"} database. Default password: ${DEFAULT_PASSWORD}`);
+  console.log(`Seeded SQLite database. Default password: ${DEFAULT_PASSWORD}`);
 }
 
 function lastSunday(offsetWeeks = 0) {
@@ -263,13 +242,13 @@ export async function ensureDashboardSamples(db) {
 
   await db.prepare(
     "INSERT INTO prayer_requests (id, member_id, title, content, is_private, status) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(uid(), "m11", "Healing for sister", "Pray for complete recovery after surgery", usePostgres ? false : 0, "pending");
+  ).run(uid(), "m11", "Healing for sister", "Pray for complete recovery after surgery", 0, "pending");
   await db.prepare(
     "INSERT INTO prayer_requests (id, member_id, title, content, is_private, status) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(uid(), "m12", "Job breakthrough", "Seeking employment after graduation", usePostgres ? false : 0, "pending");
+  ).run(uid(), "m12", "Job breakthrough", "Seeking employment after graduation", 0, "pending");
   await db.prepare(
     "INSERT INTO prayer_requests (id, member_id, title, content, is_private, status) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(uid(), "m13", "Family salvation", "Parents to receive salvation", usePostgres ? true : 1, "prayed");
+  ).run(uid(), "m13", "Family salvation", "Parents to receive salvation", 1, "prayed");
 
   const taskId = uid();
   await db.prepare(
@@ -285,23 +264,49 @@ export async function ensureDashboardSamples(db) {
   ).run(uid(), "Mary Convert", "+233 24 000 2222", "New Convert", "m6");
 
   await db.prepare(
-    `INSERT INTO cell_reports (id, type, submitter_id, cell_id, fellowship_id, period, attendance_count, new_visitors, prayer_points, challenges, status, submitted_at, due_date)
-     VALUES (?, 'cell', ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', datetime('now'), ?)`
-  ).run(uid(), "m4", "c1", "f1", "Week of " + daysAgo(7), 8, 2, "Growth in cell", "Venue space limited", daysAgo(-3));
+    `INSERT INTO cell_reports (id, type, submitter_id, cell_id, fellowship_id, period, attendance_count, new_visitors, description, status, submitted_at, due_date)
+     VALUES (?, 'cell', ?, ?, ?, ?, ?, ?, ?, 'submitted', datetime('now'), ?)`
+  ).run(uid(), "m4", "c1", "f1", "Week of " + daysAgo(7), 8, 2, "Cell met well this week. Prayer for venue space as attendance grows.", daysAgo(-3));
+
+  await db.prepare(
+    `INSERT INTO media_items (id, title, type, speaker, series, topic, date, status, approved_by, approved_at, uploaded_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'approved', ?, datetime('now'), ?)`
+  ).run(
+    uid(),
+    "Walking in Faith — Sunday Message",
+    "video",
+    "Rev. David Okonkwo",
+    "Faith Series",
+    "Trusting God daily",
+    daysAgo(3),
+    "m1",
+    "m1"
+  );
+
+  await db.prepare(
+    `INSERT INTO media_items (id, title, type, speaker, series, topic, date, status, uploaded_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
+  ).run(
+    uid(),
+    "Cell Leaders Training Notes",
+    "notes",
+    "Pastor Grace Adeyemi",
+    "Leadership",
+    "Leading your cell",
+    daysAgo(1),
+    "m7"
+  );
 
   await db.prepare(
     "INSERT INTO announcements (id, title, content, target, expires_at, pinned, created_by) VALUES (?, ?, ?, 'all', ?, ?, ?)"
-  ).run(uid(), "Combined Service This Sunday", "All fellowships meet at the main auditorium at 9 AM.", daysAgo(-14), usePostgres ? true : 1, "m1");
+  ).run(uid(), "Combined Service This Sunday", "All fellowships meet at the main auditorium at 9 AM.", daysAgo(-14), 1, "m1");
 
   console.log("Dashboard sample data (attendance, finances, prayers) added.");
 }
 
 /** Backfill newcomer flags on the latest service when attendance exists but newcomers were never tracked */
 export async function ensureNewcomerSampleData(db) {
-  const newcomerCheck = usePostgres
-    ? "SELECT 1 as x FROM attendance_members WHERE is_newcomer IS TRUE LIMIT 1"
-    : "SELECT 1 as x FROM attendance_members WHERE is_newcomer = 1 LIMIT 1";
-  const has = await db.prepare(newcomerCheck).get();
+  const has = await db.prepare("SELECT 1 as x FROM attendance_members WHERE is_newcomer = 1 LIMIT 1").get();
   if (has) return;
 
   const lastSvc = await db
@@ -309,9 +314,8 @@ export async function ensureNewcomerSampleData(db) {
     .get();
   if (!lastSvc) return;
 
-  const newcomerSet = usePostgres
-    ? "UPDATE attendance_members SET is_newcomer = TRUE WHERE record_id = ? AND member_id = ? AND status = 'present'"
-    : "UPDATE attendance_members SET is_newcomer = 1 WHERE record_id = ? AND member_id = ? AND status = 'present'";
+  const newcomerSet =
+    "UPDATE attendance_members SET is_newcomer = 1 WHERE record_id = ? AND member_id = ? AND status = 'present'";
 
   for (const mid of ["m11", "m12", "m13"]) {
     await db.prepare(newcomerSet).run(lastSvc.id, mid);
@@ -334,7 +338,5 @@ export async function ensureNewcomerSampleData(db) {
 
 if (process.argv[1]?.endsWith("seed.js")) {
   const reset = process.argv.includes("--reset");
-  import("./store.js").then(({ initDatabase }) =>
-    initDatabase().then(() => seedDatabase(reset)).catch(console.error)
-  );
+  seedDatabase(reset).catch(console.error);
 }

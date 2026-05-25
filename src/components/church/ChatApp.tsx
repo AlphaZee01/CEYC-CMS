@@ -53,24 +53,31 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
   const [loadingThread, setLoadingThread] = useState(false);
   const [sending, setSending] = useState(false);
   const [showNewChat, setShowNewChat] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
   const canBroadcast = currentUser.role === "Senior Pastor" || currentUser.role === "Admin";
 
   const activeConvo = conversations.find((c) => c.id === activeId);
   const showThread = !!activeId;
 
-  const loadConversations = useCallback(() => {
-    setLoadingList(true);
-    api<Conversation[]>("/messages/conversations")
+  const scrollToBottom = useCallback(() => {
+    const el = messagesRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+
+  const loadConversations = useCallback((options?: { silent?: boolean }) => {
+    if (!options?.silent) setLoadingList(true);
+    return api<Conversation[]>("/messages/conversations")
       .then(setConversations)
       .catch(() => setConversations([]))
-      .finally(() => setLoadingList(false));
+      .finally(() => {
+        if (!options?.silent) setLoadingList(false);
+      });
   }, []);
 
   const loadThread = useCallback(
-    (partnerId: string) => {
-      setLoadingThread(true);
-      api<ChatMessage[]>(`/messages/thread/${partnerId}`)
+    (partnerId: string, options?: { silent?: boolean }) => {
+      if (!options?.silent) setLoadingThread(true);
+      return api<ChatMessage[]>(`/messages/thread/${partnerId}`)
         .then((msgs) => {
           setMessages(msgs);
           msgs.filter((m) => !m.read && m.fromId !== currentUser.id).forEach((m) => {
@@ -78,7 +85,9 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
           });
         })
         .catch(() => setMessages([]))
-        .finally(() => setLoadingThread(false));
+        .finally(() => {
+          if (!options?.silent) setLoadingThread(false);
+        });
     },
     [currentUser.id]
   );
@@ -93,8 +102,8 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
   }, [activeId, loadThread]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    scrollToBottom();
+  }, [messages, scrollToBottom]);
 
   useEffect(() => {
     if (!supabaseConfigured || !supabase) return;
@@ -103,7 +112,7 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
       .channel(memberChatChannel(currentUser.id), { config: { broadcast: { self: true } } })
       .on("broadcast", { event: "new_message" }, ({ payload }) => {
         const msg = payload as ChatMessage;
-        loadConversations();
+        loadConversations({ silent: true });
         if (!activeId) return;
         const inThread =
           activeId === "__broadcast__"
@@ -137,22 +146,34 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
 
   const send = async () => {
     const text = draft.trim();
-    if (!text || sending) return;
+    if (!text || sending || !activeId) return;
     setSending(true);
+    const isBroadcast = activeId === "__broadcast__";
+    const threadId = activeId;
     try {
-      const isBroadcast = activeId === "__broadcast__";
-      await api("/messages", {
+      const sent = await api<{ id: string }>("/messages", {
         method: "POST",
         body: JSON.stringify({
           body: text,
           subject: "",
           broadcast: isBroadcast,
-          toIds: isBroadcast ? undefined : activeId ? [activeId] : [],
+          toIds: isBroadcast ? undefined : [threadId],
         }),
       });
       setDraft("");
-      if (activeId) loadThread(activeId);
-      loadConversations();
+      const optimistic: ChatMessage = {
+        id: sent.id,
+        fromId: currentUser.id,
+        toIds: isBroadcast ? [] : [threadId],
+        subject: "",
+        body: text,
+        sentAt: new Date().toISOString(),
+        read: true,
+        broadcast: isBroadcast,
+      };
+      setMessages((prev) => (prev.some((m) => m.id === sent.id) ? prev : [...prev, optimistic]));
+      loadConversations({ silent: true });
+      loadThread(threadId, { silent: true });
     } finally {
       setSending(false);
     }
@@ -169,7 +190,7 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
   };
 
   return (
-    <div className="-mx-3 -mb-24 flex h-[calc(100dvh-3.5rem)] overflow-hidden bg-background sm:-mx-4 lg:-mx-6 lg:-mb-8 lg:h-[calc(100dvh-5.5rem)] lg:rounded-xl lg:border lg:border-border">
+    <div className="-mx-3 flex h-full min-h-0 overflow-hidden bg-background sm:-mx-4 lg:-mx-6 lg:rounded-xl lg:border lg:border-border">
       {/* Conversation list */}
       <aside
         className={cn(
@@ -196,7 +217,7 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto pb-2 lg:pb-0">
           {canBroadcast && (
             <button
               type="button"
@@ -317,7 +338,7 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
               </div>
             </header>
 
-            <div className="flex-1 space-y-2 overflow-y-auto px-3 py-4">
+            <div ref={messagesRef} className="flex-1 space-y-2 overflow-y-auto px-3 py-4">
               {loadingThread ? (
                 <ChatThreadSkeleton />
               ) : messages.length === 0 ? (
@@ -355,10 +376,9 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
                   );
                 })
               )}
-              <div ref={bottomRef} />
             </div>
 
-            <footer className="border-t bg-card p-3 pb-[calc(5.75rem+env(safe-area-inset-bottom))] lg:pb-safe">
+            <footer className="shrink-0 border-t bg-card p-3 lg:pb-safe">
               <form
                 className="flex items-end gap-2"
                 onSubmit={(e) => {

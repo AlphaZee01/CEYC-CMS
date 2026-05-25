@@ -5,7 +5,7 @@ import path from "path";
 import fs from "fs";
 import multer from "multer";
 import { fileURLToPath } from "url";
-import { getDb, initDatabase, usePostgres } from "./store.js";
+import { getDb, initDatabase } from "./store.js";
 import { memberToJson, logActivity, notifyMember } from "./db.js";
 import { authMiddleware, loginUser, requirePage } from "./auth.js";
 import { resolveUserPages, isDepartmentHead } from "./rbac.js";
@@ -19,7 +19,16 @@ import {
   canManageSettings,
   canMessageTarget,
   canUploadMedia,
+  canApproveMedia,
+  canViewAllMedia,
+  canEditCellAttendance,
+  canManageEvents,
   scopeMemberFilter,
+  validateMemberCreate,
+  validateMemberUpdate,
+  canRecordAttendance,
+  scopeAttendanceFilter,
+  isCellScopedRole,
 } from "./rbac.js";
 import { seedDatabase, ensureDashboardSamples, ensureNewcomerSampleData } from "./seed.js";
 import { ensureBirthdayData } from "./birthday-seed.js";
@@ -35,10 +44,6 @@ const UPLOAD_DIR = path.join(__dirname, "..", "uploads");
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 await initDatabase();
-if (!usePostgres) {
-  const { initSchema } = await import("./db.js");
-  initSchema();
-}
 await seedDatabase(false);
 await ensureDashboardSamples(getDb());
 try {
@@ -57,7 +62,7 @@ if (useSupabaseAuth()) {
   } catch (err) {
     console.warn("Auth sync skipped:", err.message);
   }
-  console.log("Supabase Auth enabled — data stored on Supabase Postgres.");
+  console.log("Supabase Auth enabled.");
 }
 
 const app = express();
@@ -68,7 +73,7 @@ app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, postgres: usePostgres });
+  res.json({ ok: true, database: "sqlite" });
 });
 
 const authLimiter = (await import("express-rate-limit")).default({
@@ -124,13 +129,17 @@ app.get("/api/public/branding", async (req, res) => {
   res.json(brandingFromSettings(s, req));
 });
 
+app.get("/api/public/config", (_req, res) => {
+  res.json({ authMode: useSupabaseAuth() ? "supabase" : "jwt" });
+});
+
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
 app.post("/api/auth/login", async (req, res) => {
   try {
     if (useSupabaseAuth()) {
       return res.status(400).json({
-        error: "Use Supabase Auth sign-in from the app. Legacy /api/auth/login is disabled when DATABASE_URL points to Supabase.",
+        error: "Use Supabase Auth sign-in from the app. Legacy /api/auth/login is disabled when USE_SUPABASE_AUTH=true.",
       });
     }
     const { email, password } = req.body;
@@ -273,18 +282,50 @@ app.get("/api/members", authMiddleware, requirePage("members"), async (req, res)
   );
 });
 
+app.get("/api/members/:id", authMiddleware, async (req, res) => {
+  const db = getDb();
+  const actor = {
+    id: req.user.member.id,
+    role: req.user.member.role,
+    cell_id: req.user.member.cellId,
+    fellowship_id: req.user.member.fellowshipId,
+  };
+  const { canViewMember } = await import("./rbac.js");
+  if (!(await canViewMember(db, actor, req.params.id))) {
+    return res.status(403).json({ error: "Access denied" });
+  }
+  const member = await loadMember(db, req.params.id);
+  if (!member) return res.status(404).json({ error: "Member not found" });
+  const canSeeWelfare =
+    ["Senior Pastor", "Admin"].includes(actor.role) && actor.id !== req.params.id;
+  if (!canSeeWelfare) delete member.welfareNotes;
+  res.json(member);
+});
+
 app.post("/api/members", authMiddleware, requirePage("members"), async (req, res) => {
   const db = getDb();
   const { name, email, phone, role, cellId, fellowshipId, departmentIds = [], password, dateOfBirth } = req.body;
   if (!name || !email || !role) return res.status(400).json({ error: "Missing required fields" });
+
+  const actor = {
+    id: req.user.member.id,
+    role: req.user.member.role,
+    cell_id: req.user.member.cellId,
+    fellowship_id: req.user.member.fellowshipId,
+  };
+  const validation = validateMemberCreate(actor, { role, cellId, fellowshipId });
+  if (!validation.ok) return res.status(403).json({ error: validation.error });
+
   const id = uid();
-  const fel =
-    fellowshipId ||
-    (cellId ? await db.prepare("SELECT fellowship_id FROM cells WHERE id = ?").get(cellId)?.fellowship_id : null);
+  const resolvedCellId = validation.cellId ?? cellId ?? null;
+  const cellFel = resolvedCellId
+    ? (await db.prepare("SELECT fellowship_id FROM cells WHERE id = ?").get(resolvedCellId))?.fellowship_id
+    : null;
+  const fel = validation.fellowshipId ?? fellowshipId ?? cellFel ?? null;
   await db.prepare(
     `INSERT INTO members (id, name, email, phone, role, cell_id, fellowship_id, active, joined_at, date_of_birth)
      VALUES (?, ?, ?, ?, ?, ?, ?, 1, date('now'), ?)`
-  ).run(id, name, email, phone || "", role, cellId || null, fel || null, dateOfBirth || null);
+  ).run(id, name, email, phone || "", role, resolvedCellId, fel || null, dateOfBirth || null);
   const insMD = db.prepare("INSERT INTO member_departments (member_id, department_id) VALUES (?, ?)");
   for (const d of departmentIds) await insMD.run(id, d);
   if (password) {
@@ -317,9 +358,28 @@ app.post("/api/members", authMiddleware, requirePage("members"), async (req, res
 app.put("/api/members/:id", authMiddleware, requirePage("members"), async (req, res) => {
   const db = getDb();
   const { name, email, phone, role, cellId, fellowshipId, departmentIds, active, dateOfBirth } = req.body;
+
+  const actor = {
+    id: req.user.member.id,
+    role: req.user.member.role,
+    cell_id: req.user.member.cellId,
+    fellowship_id: req.user.member.fellowshipId,
+  };
+  const validation = await validateMemberUpdate(db, actor, req.params.id, {
+    role,
+    cellId,
+    fellowshipId,
+    active,
+  });
+  if (!validation.ok) return res.status(validation.status || 403).json({ error: validation.error });
+
   const fel =
     fellowshipId ??
-    (cellId ? await db.prepare("SELECT fellowship_id FROM cells WHERE id = ?").get(cellId)?.fellowship_id : undefined);
+    (cellId !== undefined
+      ? cellId
+        ? (await db.prepare("SELECT fellowship_id FROM cells WHERE id = ?").get(cellId))?.fellowship_id
+        : null
+      : undefined);
   const sets = [];
   const params = [];
   if (name) {
@@ -547,7 +607,14 @@ app.put("/api/departments/:id", authMiddleware, requirePage("departments"), asyn
 
 app.get("/api/attendance", authMiddleware, requirePage("attendance"), async (req, res) => {
   const db = getDb();
-  const records = await db.prepare("SELECT * FROM attendance_records ORDER BY date DESC").all();
+  const attScope = scopeAttendanceFilter({
+    role: req.user.member.role,
+    cell_id: req.user.member.cellId,
+    fellowship_id: req.user.member.fellowshipId,
+  });
+  const records = await db
+    .prepare(`SELECT ar.* FROM attendance_records ar WHERE ${attScope.sql} ORDER BY ar.date DESC`)
+    .all(...attScope.params);
   res.json(
     await Promise.all(
       records.map(async (r) => {
@@ -576,6 +643,27 @@ app.get("/api/attendance", authMiddleware, requirePage("attendance"), async (req
 app.post("/api/attendance", authMiddleware, requirePage("attendance"), async (req, res) => {
   const db = getDb();
   const { date, type, cellId, fellowshipId, presentIds = [], absentIds = [], newcomerIds = [], guests = [] } = req.body;
+
+  const actor = {
+    role: req.user.member.role,
+    cell_id: req.user.member.cellId,
+    fellowship_id: req.user.member.fellowshipId,
+  };
+  if (!canRecordAttendance(actor, { type, cellId })) {
+    return res.status(403).json({ error: "You can only record cell attendance for your own cell" });
+  }
+
+  if (isCellScopedRole(actor.role)) {
+    const resolvedCellId = cellId || actor.cell_id;
+    const memberIds = [...presentIds, ...absentIds];
+    for (const mid of memberIds) {
+      const row = await db.prepare("SELECT cell_id FROM members WHERE id = ?").get(mid);
+      if (row?.cell_id !== resolvedCellId) {
+        return res.status(403).json({ error: "You can only mark attendance for members in your cell" });
+      }
+    }
+  }
+
   const newcomerSet = new Set(newcomerIds);
   const id = uid();
   const fel = fellowshipId || (cellId ? await db.prepare("SELECT fellowship_id FROM cells WHERE id = ?").get(cellId)?.fellowship_id : null);
@@ -607,19 +695,81 @@ app.post("/api/attendance", authMiddleware, requirePage("attendance"), async (re
   res.status(201).json({ id, date, type, cellId, fellowshipId: fel, presentIds, absentIds, newcomerIds, guests });
 });
 
+app.put("/api/attendance/:id", authMiddleware, requirePage("attendance"), async (req, res) => {
+  const db = getDb();
+  const record = await db.prepare("SELECT * FROM attendance_records WHERE id = ?").get(req.params.id);
+  if (!record) return res.status(404).json({ error: "Attendance record not found" });
+
+  const actor = {
+    id: req.user.member.id,
+    role: req.user.member.role,
+    cell_id: req.user.member.cellId,
+    fellowship_id: req.user.member.fellowshipId,
+  };
+  if (!canEditCellAttendance(actor, record)) {
+    return res.status(403).json({ error: "You cannot edit this attendance record" });
+  }
+
+  const { presentIds = [], absentIds = [], newcomerIds = [], guests = [] } = req.body;
+
+  if (isCellScopedRole(actor.role)) {
+    const memberIds = [...presentIds, ...absentIds];
+    for (const mid of memberIds) {
+      const row = await db.prepare("SELECT cell_id FROM members WHERE id = ?").get(mid);
+      if (row?.cell_id !== record.cell_id) {
+        return res.status(403).json({ error: "You can only edit attendance for members in your cell" });
+      }
+    }
+  }
+
+  const newcomerSet = new Set(newcomerIds);
+  await db.prepare("DELETE FROM attendance_members WHERE record_id = ?").run(record.id);
+  await db.prepare("DELETE FROM attendance_guests WHERE record_id = ?").run(record.id);
+
+  for (const mid of presentIds) {
+    await db.prepare(
+      "INSERT INTO attendance_members (record_id, member_id, status, is_newcomer) VALUES (?, ?, 'present', ?)"
+    ).run(record.id, mid, newcomerSet.has(mid) ? 1 : 0);
+  }
+  for (const mid of absentIds) {
+    await db.prepare(
+      "INSERT INTO attendance_members (record_id, member_id, status, is_newcomer) VALUES (?, ?, 'absent', 0)"
+    ).run(record.id, mid);
+  }
+  for (const guest of guests) {
+    const name = typeof guest === "string" ? guest.trim() : guest?.name?.trim();
+    if (!name) continue;
+    const contact = typeof guest === "object" ? guest.contact?.trim() || null : null;
+    await db.prepare("INSERT INTO attendance_guests (id, record_id, name, contact) VALUES (?, ?, ?, ?)").run(
+      uid(),
+      record.id,
+      name,
+      contact
+    );
+  }
+
+  await logActivity(db, `Attendance updated for ${record.date}`, req.user.member.id);
+  res.json({ ok: true, id: record.id });
+});
+
 app.get("/api/attendance/trends", authMiddleware, requirePage("attendance"), async (req, res) => {
   const db = getDb();
+  const attScope = scopeAttendanceFilter({
+    role: req.user.member.role,
+    cell_id: req.user.member.cellId,
+    fellowship_id: req.user.member.fellowshipId,
+  });
   const rows = await db
     .prepare(
       `SELECT ar.date, c.name as cell_name, SUM(CASE WHEN am.status = 'present' THEN 1 ELSE 0 END) as present_count
        FROM attendance_records ar
        JOIN attendance_members am ON am.record_id = ar.id
        LEFT JOIN cells c ON c.id = ar.cell_id
-       WHERE ar.type = 'cell' AND ar.date >= date('now', '-60 days')
+       WHERE ar.type = 'cell' AND ar.date >= date('now', '-60 days') AND ${attScope.sql}
        GROUP BY ar.date, ar.cell_id, c.name
        ORDER BY ar.date`
     )
-    .all();
+    .all(...attScope.params);
   res.json(rows);
 });
 
@@ -650,6 +800,9 @@ app.get("/api/events", authMiddleware, requirePage("events"), async (req, res) =
 });
 
 app.post("/api/events", authMiddleware, requirePage("events"), async (req, res) => {
+  if (!canManageEvents(req.user.member.role)) {
+    return res.status(403).json({ error: "You cannot create church events" });
+  }
   const db = getDb();
   const { title, date, time, location, departmentId, description } = req.body;
   const id = uid();
@@ -1301,11 +1454,24 @@ app.patch("/api/tasks/:id", authMiddleware, requirePage("tasks"), async (req, re
 
 // ─── Media ─────────────────────────────────────────────────────────────────────
 
+app.get("/api/media/capabilities", authMiddleware, requirePage("media"), async (req, res) => {
+  const member = req.user.member;
+  res.json({
+    canUpload: await canUploadMedia(getDb(), member),
+    canApprove: canApproveMedia(member.role),
+    canViewPending: canViewAllMedia(member.role) || (await canUploadMedia(getDb(), member)),
+  });
+});
+
 app.get("/api/media", authMiddleware, requirePage("media"), async (req, res) => {
   const db = getDb();
   const { search, type, series } = req.query;
+  const member = req.user.member;
   let sql = "SELECT * FROM media_items WHERE 1=1";
   const params = [];
+  if (!canViewAllMedia(member.role) && !(await canUploadMedia(db, member))) {
+    sql += " AND status = 'approved'";
+  }
   if (search) {
     sql += ` AND (title LIKE ? OR speaker LIKE ? OR topic LIKE ? OR series LIKE ?)`;
     const q = `%${search}%`;
@@ -1333,12 +1499,15 @@ app.get("/api/media", authMiddleware, requirePage("media"), async (req, res) => 
       fileUrl: m.file_url || (m.file_path ? `/uploads/${path.basename(m.file_path)}` : null),
       shareTarget: m.share_target,
       shareTargetId: m.share_target_id,
+      status: m.status || "approved",
     }))
   );
 });
 
 app.post("/api/media", authMiddleware, requirePage("media"), upload.single("file"), async (req, res) => {
-  if (!canUploadMedia(req.user.member.role)) return res.status(403).json({ error: "Upload not permitted" });
+  if (!(await canUploadMedia(getDb(), req.user.member))) {
+    return res.status(403).json({ error: "Upload not permitted" });
+  }
   const db = getDb();
   const { title, type, speaker, series, topic, date, shareTarget, shareTargetId } = req.body;
   const id = uid();
@@ -1357,9 +1526,13 @@ app.post("/api/media", authMiddleware, requirePage("media"), upload.single("file
       return res.status(500).json({ error: "File upload failed" });
     }
   }
+  const autoApprove = canApproveMedia(req.user.member.role);
+  const status = autoApprove ? "approved" : "pending";
+  const approvedBy = autoApprove ? req.user.member.id : null;
+  const approvedAt = autoApprove ? new Date().toISOString() : null;
   await db.prepare(
-    `INSERT INTO media_items (id, title, type, speaker, series, topic, date, file_path, file_url, share_target, share_target_id, uploaded_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO media_items (id, title, type, speaker, series, topic, date, file_path, file_url, share_target, share_target_id, uploaded_by, status, approved_by, approved_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     title,
@@ -1372,9 +1545,31 @@ app.post("/api/media", authMiddleware, requirePage("media"), upload.single("file
     fileUrl,
     shareTarget || null,
     shareTargetId || null,
-    req.user.member.id
+    req.user.member.id,
+    status,
+    approvedBy,
+    approvedAt
   );
-  res.status(201).json({ id, title, type, fileUrl });
+  await logActivity(db, `Media uploaded: ${title}`, req.user.member.id);
+  res.status(201).json({ id, title, status });
+});
+
+app.patch("/api/media/:id", authMiddleware, requirePage("media"), async (req, res) => {
+  const { status } = req.body;
+  if (!canApproveMedia(req.user.member.role)) {
+    return res.status(403).json({ error: "Only pastors can approve media" });
+  }
+  if (!["approved", "rejected"].includes(status)) {
+    return res.status(400).json({ error: "Status must be approved or rejected" });
+  }
+  const db = getDb();
+  const row = await db.prepare("SELECT id FROM media_items WHERE id = ?").get(req.params.id);
+  if (!row) return res.status(404).json({ error: "Media not found" });
+  await db.prepare(
+    "UPDATE media_items SET status = ?, approved_by = ?, approved_at = datetime('now') WHERE id = ?"
+  ).run(status, req.user.member.id, req.params.id);
+  await logActivity(db, `Media ${status}: ${req.params.id}`, req.user.member.id);
+  res.json({ ok: true, status });
 });
 
 // ─── Reports (analytics + cell reports) ────────────────────────────────────────
@@ -1425,8 +1620,23 @@ app.get("/api/reports/analytics", authMiddleware, requirePage("reports"), async 
 
 app.get("/api/reports/submissions", authMiddleware, requirePage("report-submissions"), async (req, res) => {
   const db = getDb();
+  const actor = req.user.member;
+  let rows;
+  if (isCellScopedRole(actor.role) && actor.cellId) {
+    rows = await db.prepare("SELECT * FROM cell_reports WHERE cell_id = ? ORDER BY created_at DESC").all(actor.cellId);
+  } else if (actor.role === "Fellowship Leader" && actor.fellowshipId) {
+    rows = await db
+      .prepare(
+        `SELECT * FROM cell_reports
+         WHERE fellowship_id = ? OR cell_id IN (SELECT id FROM cells WHERE fellowship_id = ?)
+         ORDER BY created_at DESC`
+      )
+      .all(actor.fellowshipId, actor.fellowshipId);
+  } else {
+    rows = await db.prepare("SELECT * FROM cell_reports ORDER BY created_at DESC").all();
+  }
   res.json(
-    (await db.prepare("SELECT * FROM cell_reports ORDER BY created_at DESC").all()).map((r) => ({
+    rows.map((r) => ({
       id: r.id,
       type: r.type,
       submitterId: r.submitter_id,
@@ -1436,8 +1646,10 @@ app.get("/api/reports/submissions", authMiddleware, requirePage("report-submissi
       period: r.period,
       attendanceCount: r.attendance_count,
       newVisitors: r.new_visitors,
-      prayerPoints: r.prayer_points,
-      challenges: r.challenges,
+      description:
+        r.description ||
+        [r.prayer_points, r.challenges].filter((p) => p?.trim()).join("\n\n") ||
+        "",
       status: r.status,
       pastorComment: r.pastor_comment,
       dueDate: r.due_date,
@@ -1456,8 +1668,7 @@ app.post("/api/reports/submissions", authMiddleware, requirePage("report-submiss
     period,
     attendanceCount,
     newVisitors,
-    prayerPoints,
-    challenges,
+    description,
     dueDate,
   } = req.body;
   const role = req.user.member.role;
@@ -1470,23 +1681,29 @@ app.post("/api/reports/submissions", authMiddleware, requirePage("report-submiss
   } else if (type === "cell" && !["Cell Leader", "Sub-cell Leader"].includes(role)) {
     return res.status(403).json({ error: "Cell report requires Cell Leader or Sub-cell Leader" });
   }
+  let resolvedCellId = cellId || null;
+  if (type === "cell" && isCellScopedRole(role)) {
+    if (cellId && cellId !== req.user.member.cellId) {
+      return res.status(403).json({ error: "You can only submit reports for your own cell" });
+    }
+    resolvedCellId = req.user.member.cellId;
+  }
   const defaultDue = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
   const id = uid();
   await db.prepare(
-    `INSERT INTO cell_reports (id, type, submitter_id, cell_id, fellowship_id, department_id, period, attendance_count, new_visitors, prayer_points, challenges, status, submitted_at, due_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', datetime('now'), ?)`
+    `INSERT INTO cell_reports (id, type, submitter_id, cell_id, fellowship_id, department_id, period, attendance_count, new_visitors, description, status, submitted_at, due_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', datetime('now'), ?)`
   ).run(
     id,
     type,
     req.user.member.id,
-    cellId || null,
+    resolvedCellId,
     fellowshipId || null,
     departmentId || null,
     period,
     attendanceCount,
     newVisitors,
-    prayerPoints,
-    challenges,
+    description || "",
     dueDate || defaultDue
   );
   await logActivity(db, `${type} report submitted`, req.user.member.id);
@@ -1522,7 +1739,7 @@ app.get("/api/settings", authMiddleware, requirePage("settings"), async (req, re
     email: s.email,
     logoUrl: branding.logoUrl,
     emailConfigured: isEmailConfigured(),
-    database: usePostgres ? "postgresql" : "sqlite",
+    database: "sqlite",
   });
 });
 
@@ -1899,6 +2116,32 @@ app.get("/api/dashboard/birthdays", authMiddleware, requirePage("dashboard"), as
 
 app.get("/api/dashboard/stats", authMiddleware, requirePage("dashboard"), async (req, res) => {
   const db = getDb();
+  const actor = req.user.member;
+  const scope = scopeMemberFilter({
+    id: actor.id,
+    role: actor.role,
+    fellowship_id: actor.fellowshipId,
+    cell_id: actor.cellId,
+  });
+
+  if (isCellScopedRole(actor.role)) {
+    const m = await db.prepare(`SELECT COUNT(*) as c FROM members m WHERE m.active = 1 AND ${scope.sql}`).get(...scope.params);
+    const lastCell = await db
+      .prepare(
+        `SELECT ar.date FROM attendance_records ar
+         WHERE ar.type = 'cell' AND ar.cell_id = ? ORDER BY ar.date DESC LIMIT 1`
+      )
+      .get(actor.cellId);
+    return res.json({
+      members: Number(m?.c ?? 0),
+      cells: 1,
+      fellowships: 1,
+      departments: 0,
+      lastCellMeeting: lastCell?.date || null,
+      scoped: "cell",
+    });
+  }
+
   const [m, c, f, d] = await Promise.all([
     db.prepare("SELECT COUNT(*) as c FROM members WHERE active = 1").get(),
     db.prepare("SELECT COUNT(*) as c FROM cells").get(),

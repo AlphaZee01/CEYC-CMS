@@ -1,5 +1,3 @@
-import { usePostgres } from "./store.js";
-
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
@@ -52,17 +50,6 @@ function formatCelebrant(row, contextYear, contextMonth, referenceDate = new Dat
 }
 
 async function queryBirthdayRows(db, month) {
-  if (usePostgres) {
-    return db
-      .prepare(
-        `SELECT id, name, role, phone, date_of_birth
-         FROM members
-         WHERE active IS TRUE AND date_of_birth IS NOT NULL
-           AND EXTRACT(MONTH FROM date_of_birth::date) = ?
-         ORDER BY EXTRACT(DAY FROM date_of_birth::date), name`
-      )
-      .all(month);
-  }
   return db
     .prepare(
       `SELECT id, name, role, phone, date_of_birth

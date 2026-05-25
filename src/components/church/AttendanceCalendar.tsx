@@ -2,8 +2,10 @@ import { useMemo, useState, useCallback } from "react";
 import { format, parseISO } from "date-fns";
 import type { DayContentProps } from "react-day-picker";
 import { Calendar } from "@/components/ui/calendar";
-import { Card, Badge, IconBox, AvatarCircle, cn } from "@/components/church/ui";
-import { Church, Network, Building2, UserCheck, UserX, ChevronLeft } from "lucide-react";
+import { Card, Badge, IconBox, AvatarCircle, Btn, cn } from "@/components/church/ui";
+import { Church, Network, Building2, UserCheck, UserX, ChevronLeft, Edit } from "lucide-react";
+import { api } from "@/lib/api";
+import { canEditCellAttendance } from "@/lib/rbac";
 import type { Member, Cell, Fellowship } from "@/types/church";
 
 export type AttendanceRecord = {
@@ -92,17 +94,56 @@ function AttendanceEventDetail({
   members,
   cells,
   fellowships,
+  currentUser,
   onBack,
+  onSaved,
 }: {
   record: AttendanceRecord;
   members: Member[];
   cells: Cell[];
   fellowships: Fellowship[];
+  currentUser: Member;
   onBack: () => void;
+  onSaved: () => void;
 }) {
+  const canEdit = canEditCellAttendance(currentUser.role, record, currentUser);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [present, setPresent] = useState<Set<string>>(() => new Set(record.presentIds));
+
+  const editRoster =
+    record.type === "cell" && record.cellId
+      ? members.filter((m) => m.active && m.cellId === record.cellId).sort((a, b) => a.name.localeCompare(b.name))
+      : members
+          .filter((m) => m.active && (record.presentIds.includes(m.id) || record.absentIds.includes(m.id)))
+          .sort((a, b) => a.name.localeCompare(b.name));
+
   const groups = groupMembersByFellowshipAndCell(record, members, cells, fellowships);
-  const present = record.presentIds.length;
-  const absent = record.absentIds.length;
+  const presentCount = editing ? present.size : record.presentIds.length;
+  const absentCount = editing ? editRoster.length - present.size : record.absentIds.length;
+
+  const togglePresent = (id: string) => {
+    const next = new Set(present);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setPresent(next);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const presentIds = [...present];
+      const absentIds = editRoster.map((m) => m.id).filter((id) => !presentIds.includes(id));
+      await api(`/attendance/${record.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ presentIds, absentIds, newcomerIds: record.newcomerIds || [], guests: record.guests || [] }),
+      });
+      setEditing(false);
+      onSaved();
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <Card className="space-y-4">
@@ -124,15 +165,40 @@ function AttendanceEventDetail({
           <h2 className="text-lg font-semibold">{eventLabel(record, cells)}</h2>
           <p className="text-sm text-muted-foreground">{record.date}</p>
           <div className="mt-2 flex flex-wrap gap-2">
-            <Badge color="emerald">{present} present</Badge>
-            <Badge color="rose">{absent} absent</Badge>
+            <Badge color="emerald">{presentCount} present</Badge>
+            <Badge color="rose">{absentCount} absent</Badge>
             {(record.guests?.length ?? 0) > 0 && (
               <Badge color="violet">{record.guests!.length} guest{record.guests!.length === 1 ? "" : "s"}</Badge>
             )}
           </div>
         </div>
+        {canEdit && !editing && (
+          <Btn variant="secondary" className="!px-3 !py-2" onClick={() => { setPresent(new Set(record.presentIds)); setEditing(true); }}>
+            <Edit className="h-4 w-4" /> Edit
+          </Btn>
+        )}
       </div>
 
+      {editing ? (
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">Update who was present for this cell meeting.</p>
+          <ul className="space-y-2">
+            {editRoster.map((m) => (
+              <li key={m.id} className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50">
+                <label className="flex flex-1 cursor-pointer items-center gap-3">
+                  <input type="checkbox" checked={present.has(m.id)} onChange={() => togglePresent(m.id)} />
+                  <AvatarCircle name={m.name} size="sm" />
+                  <span className="text-sm font-medium">{m.name}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+          <div className="flex gap-2">
+            <Btn onClick={save} disabled={saving}>{saving ? "Saving..." : "Save changes"}</Btn>
+            <Btn variant="ghost" onClick={() => setEditing(false)}>Cancel</Btn>
+          </div>
+        </div>
+      ) : (
       <div className="space-y-4">
         {groups.map((fel) => (
           <div key={fel.fellowshipId} className="rounded-xl border border-border bg-muted/20 p-4">
@@ -181,8 +247,9 @@ function AttendanceEventDetail({
           </div>
         ))}
       </div>
+      )}
 
-      {(record.guests?.length ?? 0) > 0 && (
+      {!editing && (record.guests?.length ?? 0) > 0 && (
         <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
           <p className="mb-2 text-sm font-semibold">First-time guests</p>
           <div className="flex flex-wrap gap-1.5">
@@ -201,11 +268,15 @@ export function AttendanceCalendarView({
   members,
   cells,
   fellowships,
+  currentUser,
+  onRecordUpdated,
 }: {
   records: AttendanceRecord[];
   members: Member[];
   cells: Cell[];
   fellowships: Fellowship[];
+  currentUser: Member;
+  onRecordUpdated?: () => void;
 }) {
   const sortedRecords = useMemo(
     () => [...records].sort((a, b) => b.date.localeCompare(a.date) || a.type.localeCompare(b.type)),
@@ -264,7 +335,12 @@ export function AttendanceCalendarView({
         members={members}
         cells={cells}
         fellowships={fellowships}
+        currentUser={currentUser}
         onBack={() => setSelectedRecordId(null)}
+        onSaved={() => {
+          onRecordUpdated?.();
+          setSelectedRecordId(null);
+        }}
       />
     );
   }

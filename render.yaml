@@ -13,14 +13,12 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: DATABASE_SSL
-        value: "true"
       - key: CHURCH_NAME
         value: Christ Embassy LCM
       - key: JWT_SECRET
         generateValue: true
-      # Required — set in Render dashboard (copy from your local .env)
-      - key: DATABASE_URL
+      # Optional — set in Render dashboard if using Supabase Auth
+      - key: USE_SUPABASE_AUTH
         sync: false
       - key: SUPABASE_URL
         sync: false

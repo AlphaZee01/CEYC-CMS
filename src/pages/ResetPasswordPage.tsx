@@ -1,7 +1,8 @@
 import { useState, useEffect, type FormEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { api } from "@/lib/api";
-import { supabase, supabaseConfigured, updateSupabasePassword } from "@/lib/supabase";
+import { supabase, updateSupabasePassword } from "@/lib/supabase";
+import { loadAuthMode, useSupabaseForAuth } from "@/lib/auth-mode";
 import { Btn, Input, Card } from "@/components/church/ui";
 
 export default function ResetPasswordPage() {
@@ -12,10 +13,18 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [recoveryReady, setRecoveryReady] = useState(!supabaseConfigured);
+  const [authReady, setAuthReady] = useState(false);
+  const [recoveryReady, setRecoveryReady] = useState(false);
 
   useEffect(() => {
-    if (!supabaseConfigured || !supabase) return;
+    loadAuthMode().then(() => {
+      setAuthReady(true);
+      if (!useSupabaseForAuth()) setRecoveryReady(true);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!authReady || !useSupabaseForAuth() || !supabase) return;
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) setRecoveryReady(true);
@@ -25,7 +34,7 @@ export default function ResetPasswordPage() {
       if (event === "PASSWORD_RECOVERY") setRecoveryReady(true);
     });
     return () => subscription.unsubscribe();
-  }, []);
+  }, [authReady]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -40,7 +49,7 @@ export default function ResetPasswordPage() {
     setLoading(true);
     setError("");
     try {
-      if (supabaseConfigured) {
+      if (useSupabaseForAuth()) {
         await updateSupabasePassword(password);
       } else {
         await api("/auth/reset-password", {
@@ -56,7 +65,9 @@ export default function ResetPasswordPage() {
     }
   };
 
-  if (!supabaseConfigured && !legacyToken) {
+  if (!authReady) return null;
+
+  if (!useSupabaseForAuth() && !legacyToken) {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
         <Card className="max-w-md text-center">
@@ -67,9 +78,9 @@ export default function ResetPasswordPage() {
     );
   }
 
-  if (supabaseConfigured && !recoveryReady) {
+  if (useSupabaseForAuth() && !recoveryReady) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[hsl(var(--sidebar-background))] p-4">
+      <div className="flex min-h-screen items-center justify-center bg-background p-4">
         <Card className="w-full max-w-md text-center">
           <p className="text-sm text-muted-foreground">Open the password reset link from your email to continue.</p>
           <Link to="/" className="mt-4 inline-block text-sm text-accent">Back to login</Link>
@@ -79,7 +90,7 @@ export default function ResetPasswordPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[hsl(var(--sidebar-background))] p-4">
+    <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md">
         <h1 className="mb-4 text-xl font-bold text-primary">Reset Password</h1>
         {done ? (

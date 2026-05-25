@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Users,
   Network,
@@ -34,6 +35,8 @@ import {
   Church,
   UsersRound,
   UserPlus,
+  ArrowLeft,
+  Mail,
 } from "lucide-react";
 import {
   LineChart,
@@ -51,12 +54,26 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { api, exportCSV } from "@/lib/api";
-import { changeSupabasePassword, supabaseConfigured } from "@/lib/supabase";
+import { changeSupabasePassword } from "@/lib/supabase";
+import { useSupabaseForAuth } from "@/lib/auth-mode";
 import { CURRENCY_SYMBOL, formatCurrency } from "@/lib/utils";
 import { Card, Btn, Badge, Input, Select, Textarea, Modal, PageHeader, TabBar, ModalFooter, IconBox, AvatarCircle, cn } from "@/components/church/ui";
 import { DashboardSkeleton, MemberListSkeleton } from "@/components/church/skeletons";
 import { CHART_COLORS, ICON_TONES, ICON_TONE_LIST, type IconTone } from "@/lib/icon-colors";
 import { pageHeaderProps } from "@/lib/page-icons";
+import {
+  assignableRolesFor,
+  canCreateMembers,
+  canManageMember,
+  canRecordServiceAttendance,
+  canManageEvents,
+  canEditCellAttendance,
+  canApproveMedia,
+  isCellScopedRole,
+  membersPageSubtitle,
+  canViewWelfareNotes,
+  memberProfilePath,
+} from "@/lib/rbac";
 import { EventCalendar } from "@/components/church/EventCalendar";
 import { AttendanceCalendarView, type AttendanceRecord } from "@/components/church/AttendanceCalendar";
 import { ChatApp } from "@/components/church/ChatApp";
@@ -69,7 +86,7 @@ export const PAGE_ACCESS: Record<Role, PageId[]> = {
   "Associate Pastor": PAGE_META.map((p) => p.id).filter((id) => id !== "settings" && id !== "finances"),
   Admin: ["dashboard", "members", "attendance", "finances", "settings", "announcements", "tasks", "communications"],
   "Fellowship Leader": ["dashboard", "members", "cells", "attendance", "communications", "report-submissions", "announcements", "events"],
-  "Cell Leader": ["dashboard", "members", "attendance", "communications", "report-submissions", "announcements", "events", "prayer"],
+  "Cell Leader": ["dashboard", "members", "attendance", "communications", "report-submissions", "announcements", "events", "prayer", "media"],
   "Sub-cell Leader": ["dashboard", "members", "attendance", "communications", "announcements", "events", "report-submissions"],
   "Cell Member": ["dashboard", "communications", "prayer", "media", "announcements", "events"],
   "Church Member": ["dashboard", "communications", "prayer", "media", "announcements", "events"],
@@ -100,27 +117,30 @@ export interface PageProps {
 }
 
 function StatCard({ label, value, icon: Icon, tone = "blue", sub }: { label: string; value: string | number; icon: typeof Users; tone?: IconTone; sub?: string }) {
+  const t = ICON_TONES[tone];
   return (
-    <Card className="flex items-start justify-between gap-2 p-3 sm:p-5">
+    <div className="surface-card-hover flex items-start justify-between gap-3 p-4 sm:p-5">
       <div className="min-w-0">
-        <p className="text-xs text-muted-foreground sm:text-sm">{label}</p>
-        <p className="mt-1 truncate text-lg font-bold text-foreground sm:text-2xl">{value}</p>
-        {sub && <p className="mt-0.5 text-xs text-muted-foreground">{sub}</p>}
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+        <p className="mt-2 truncate text-2xl font-bold tracking-tight text-foreground sm:text-3xl">{value}</p>
+        {sub && <p className="mt-1 text-xs text-muted-foreground">{sub}</p>}
       </div>
-      <IconBox icon={Icon} tone={tone} size="md" variant="soft" />
-    </Card>
+      <div className={cn("flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl", t.soft)}>
+        <Icon className={cn("h-5 w-5", t.icon)} strokeWidth={2} />
+      </div>
+    </div>
   );
 }
 
 function DashboardSection({ title, icon: Icon, tone = "blue", children, className }: { title: string; icon: typeof Users; tone?: IconTone; children: ReactNode; className?: string }) {
   return (
-    <Card className={className}>
-      <div className="mb-4 flex items-center gap-3">
+    <div className={cn("surface-card p-4 sm:p-5", className)}>
+      <div className="mb-5 flex items-center gap-3 border-b border-border pb-4">
         <IconBox icon={Icon} tone={tone} size="md" />
-        <h2 className="font-semibold">{title}</h2>
+        <h2 className="text-base font-semibold tracking-tight text-foreground">{title}</h2>
       </div>
       {children}
-    </Card>
+    </div>
   );
 }
 
@@ -670,20 +690,56 @@ function memberName(members: Member[], id: string | null | undefined) {
   return members.find((m) => m.id === id)?.name || "—";
 }
 
-function isPastoral(role: Role) {
-  return role === "Senior Pastor" || role === "Associate Pastor";
+function MemberNameLink({
+  members,
+  id,
+  className,
+}: {
+  members: Member[];
+  id: string | null | undefined;
+  className?: string;
+}) {
+  const navigate = useNavigate();
+  if (!id) return <span className={className}>—</span>;
+  const m = members.find((x) => x.id === id);
+  if (!m) return <span className={className}>—</span>;
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        navigate(memberProfilePath(id));
+      }}
+      className={cn("text-left font-medium text-primary hover:underline", className)}
+    >
+      {m.name}
+    </button>
+  );
 }
 
-function canManageMembers(role: Role) {
-  return !["Cell Member", "Church Member"].includes(role);
+function formatMemberDate(iso: string | null | undefined) {
+  if (!iso) return "—";
+  try {
+    return new Date(iso.includes("T") ? iso : `${iso}T12:00:00`).toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function isPastoral(role: Role) {
+  return role === "Senior Pastor" || role === "Associate Pastor";
 }
 
 function canAccessFinances(role: Role) {
   return role === "Senior Pastor" || role === "Admin";
 }
 
-function canUploadMedia(role: Role) {
-  return ["Senior Pastor", "Associate Pastor", "Admin"].includes(role);
+function canManageStructure(role: Role) {
+  return ["Senior Pastor", "Associate Pastor", "Admin", "Fellowship Leader"].includes(role);
 }
 
 function canManageSettings(role: Role) {
@@ -692,9 +748,17 @@ function canManageSettings(role: Role) {
 
 // ─── Dashboard ─────────────────────────────────────────────────────────────────
 
-export function DashboardPage({ members, currentUser }: PageProps) {
+export function DashboardPage({ members, cells, currentUser }: PageProps) {
   const pastoral = isPastoral(currentUser.role) || currentUser.role === "Admin";
-  const [stats, setStats] = useState({ members: 0, cells: 0, fellowships: 0, departments: 0 });
+  const cellScoped = isCellScopedRole(currentUser.role);
+  const myCell = cells.find((c) => c.id === currentUser.cellId);
+  const [stats, setStats] = useState({
+    members: 0,
+    cells: 0,
+    fellowships: 0,
+    departments: 0,
+    lastCellMeeting: null as string | null,
+  });
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [activities, setActivities] = useState<{ id: string; text: string; time: string }[]>([]);
   const [events, setEvents] = useState<{ id: string; title: string; date: string; time: string; rsvpIds: string[] }[]>([]);
@@ -721,7 +785,11 @@ export function DashboardPage({ members, currentUser }: PageProps) {
       <PageHeader
         {...pageHeaderProps("dashboard")}
         title="Dashboard"
-        subtitle={pastoral ? `Church overview · Welcome, ${currentUser.name}` : `Welcome back, ${currentUser.name}`}
+        subtitle={
+          pastoral
+            ? `Church overview · Welcome, ${currentUser.name} · ${currentUser.role}`
+            : `Welcome back, ${currentUser.name} · ${currentUser.role}`
+        }
       />
       {loading ? (
         <DashboardSkeleton pastoral={pastoral} />
@@ -730,10 +798,26 @@ export function DashboardPage({ members, currentUser }: PageProps) {
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-            <StatCard label="Total Members" value={stats.members} icon={Users} tone="indigo" />
-            <StatCard label="Cells" value={stats.cells} icon={Network} tone="cyan" />
-            <StatCard label="Fellowships" value={stats.fellowships} icon={Building2} tone="violet" />
-            <StatCard label="Departments" value={stats.departments} icon={Building2} tone="orange" />
+            {cellScoped ? (
+              <>
+                <StatCard label="Cell Members" value={stats.members} icon={Users} tone="indigo" sub={myCell?.name} />
+                <StatCard
+                  label="Last Cell Meeting"
+                  value={stats.lastCellMeeting ? new Date(stats.lastCellMeeting).toLocaleDateString() : "—"}
+                  icon={CalendarDays}
+                  tone="cyan"
+                />
+                <StatCard label="Your Cell" value={myCell?.name || "—"} icon={Network} tone="violet" />
+                <StatCard label="Your Role" value={currentUser.role} icon={UserCheck} tone="orange" />
+              </>
+            ) : (
+              <>
+                <StatCard label="Total Members" value={stats.members} icon={Users} tone="indigo" />
+                <StatCard label="Cells" value={stats.cells} icon={Network} tone="cyan" />
+                <StatCard label="Fellowships" value={stats.fellowships} icon={Building2} tone="violet" />
+                <StatCard label="Departments" value={stats.departments} icon={Building2} tone="orange" />
+              </>
+            )}
           </div>
           <div className="grid gap-6 lg:grid-cols-2">
             <Card>
@@ -775,10 +859,14 @@ export function DashboardPage({ members, currentUser }: PageProps) {
 // ─── Members ───────────────────────────────────────────────────────────────────
 
 export function MembersPage({ members, cells, fellowships, departments, currentUser, onRefresh }: PageProps) {
+  const navigate = useNavigate();
+  const cellScoped = isCellScopedRole(currentUser.role);
+  const myCell = cells.find((c) => c.id === currentUser.cellId);
+  const roleOptions = assignableRolesFor(currentUser.role);
   const [list, setList] = useState<Member[]>([]);
   const [search, setSearch] = useState("");
   const [filterRole, setFilterRole] = useState("");
-  const [filterCell, setFilterCell] = useState("");
+  const [filterCell, setFilterCell] = useState(cellScoped ? currentUser.cellId || "" : "");
   const [filterFellowship, setFilterFellowship] = useState("");
   const [filterDept, setFilterDept] = useState("");
   const [modal, setModal] = useState<"add" | "edit" | null>(null);
@@ -869,24 +957,45 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
       <PageHeader
         {...pageHeaderProps("members")}
         title="Members"
-        subtitle="Directory & role management"
+        subtitle={membersPageSubtitle(currentUser.role, myCell?.name)}
         action={
-          canManageMembers(currentUser.role) ? (
-            <Btn onClick={() => { setEdit({ role: "Church Member", active: true, departmentIds: [] }); setModal("add"); }}>
+          canCreateMembers(currentUser.role) ? (
+            <Btn
+              onClick={() => {
+                setEdit({
+                  role: cellScoped ? "Cell Member" : "Church Member",
+                  active: true,
+                  departmentIds: [],
+                  ...(cellScoped ? { cellId: currentUser.cellId, fellowshipId: currentUser.fellowshipId } : {}),
+                });
+                setModal("add");
+              }}
+            >
               <Plus className="h-4 w-4" /> Add Member
             </Btn>
           ) : undefined
         }
       />
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <div className="relative lg:col-span-2">
+      <div className={cn("grid grid-cols-1 gap-3 sm:grid-cols-2", cellScoped ? "lg:grid-cols-3" : "lg:grid-cols-5")}>
+        <div className={cn("relative", cellScoped ? "lg:col-span-2" : "lg:col-span-2")}>
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search members..." className="w-full min-h-[44px] rounded-lg border border-input py-2 pl-10 pr-3 text-base sm:text-sm" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search members..." className="w-full min-h-[44px] rounded-xl border border-input bg-background py-2 pl-10 pr-3 text-base shadow-sm transition focus:border-primary/40 focus:outline-none focus:ring-2 focus:ring-primary/20 sm:text-sm" />
         </div>
-        <Select value={filterRole} onChange={setFilterRole} options={[{ value: "", label: "All roles" }, ...ROLES.map((r) => ({ value: r, label: r }))]} />
-        <Select value={filterCell} onChange={setFilterCell} options={[{ value: "", label: "All cells" }, ...cells.map((c) => ({ value: c.id, label: c.name }))]} />
-        <Select value={filterFellowship} onChange={setFilterFellowship} options={[{ value: "", label: "All fellowships" }, ...fellowships.map((f) => ({ value: f.id, label: f.name }))]} />
-        <Select value={filterDept} onChange={setFilterDept} options={[{ value: "", label: "All departments" }, ...departments.map((d) => ({ value: d.id, label: d.name }))]} />
+        <Select
+          value={filterRole}
+          onChange={setFilterRole}
+          options={[
+            { value: "", label: "All roles" },
+            ...(cellScoped ? roleOptions : ROLES).map((r) => ({ value: r, label: r })),
+          ]}
+        />
+        {!cellScoped && (
+          <>
+            <Select value={filterCell} onChange={setFilterCell} options={[{ value: "", label: "All cells" }, ...cells.map((c) => ({ value: c.id, label: c.name }))]} />
+            <Select value={filterFellowship} onChange={setFilterFellowship} options={[{ value: "", label: "All fellowships" }, ...fellowships.map((f) => ({ value: f.id, label: f.name }))]} />
+            <Select value={filterDept} onChange={setFilterDept} options={[{ value: "", label: "All departments" }, ...departments.map((d) => ({ value: d.id, label: d.name }))]} />
+          </>
+        )}
       </div>
       {loading ? (
         <MemberListSkeleton />
@@ -897,14 +1006,20 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
               <Card key={m.id} className="p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="font-medium">{m.name}</p>
+                    <button
+                      type="button"
+                      onClick={() => navigate(memberProfilePath(m.id))}
+                      className="font-medium text-primary hover:underline"
+                    >
+                      {m.name}
+                    </button>
                     <p className="truncate text-xs text-muted-foreground">{m.email}</p>
                     <div className="mt-2 flex flex-wrap gap-2">
                       <Badge color="purple">{m.role}</Badge>
                       {m.cellId && <Badge color="gray">{cells.find((c) => c.id === m.cellId)?.name}</Badge>}
                     </div>
                   </div>
-                  {canManageMembers(currentUser.role) && (
+                  {canManageMember(currentUser, m) && (
                     <div className="flex shrink-0 gap-1">
                       <button type="button" className="touch-target flex items-center justify-center rounded-lg hover:bg-muted" onClick={() => { setEdit(m); setModal("edit"); }} aria-label="Edit member">
                         <Edit className="h-4 w-4" />
@@ -934,14 +1049,20 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
                 {list.map((m) => (
                   <tr key={m.id} className="border-b last:border-0 hover:bg-muted/30">
                     <td className="px-4 py-3">
-                      <p className="font-medium">{m.name}</p>
+                      <button
+                        type="button"
+                        onClick={() => navigate(memberProfilePath(m.id))}
+                        className="font-medium text-primary hover:underline"
+                      >
+                        {m.name}
+                      </button>
                       <p className="text-xs text-muted-foreground">{m.email}</p>
                     </td>
                     <td className="px-4 py-3"><Badge color="purple">{m.role}</Badge></td>
                     <td className="hidden px-4 py-3 md:table-cell">{cells.find((c) => c.id === m.cellId)?.name || "—"}</td>
                     <td className="hidden px-4 py-3 lg:table-cell">{fellowships.find((f) => f.id === m.fellowshipId)?.name || "—"}</td>
                     <td className="px-4 py-3 text-right">
-                      {canManageMembers(currentUser.role) && (
+                      {canManageMember(currentUser, m) && (
                         <div className="flex justify-end gap-1">
                           <button type="button" className="rounded p-1 hover:bg-muted" onClick={() => { setEdit(m); setModal("edit"); }}>
                             <Edit className="h-4 w-4" />
@@ -966,15 +1087,318 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
           <Input label="Phone" value={edit.phone || ""} onChange={(v) => setEdit((e) => ({ ...e, phone: v }))} />
           <Input label="Date of birth" type="date" value={edit.dateOfBirth || ""} onChange={(v) => setEdit((e) => ({ ...e, dateOfBirth: v || null }))} />
           {modal === "add" && <Input label="Password (optional)" type="password" value={edit.password || ""} onChange={(v) => setEdit((e) => ({ ...e, password: v }))} />}
-          <Select label="Role" value={edit.role || "Church Member"} onChange={(v) => setEdit((e) => ({ ...e, role: v as Role }))} options={ROLES.map((r) => ({ value: r, label: r }))} />
-          <Select label="Cell" value={edit.cellId || ""} onChange={(v) => setEdit((e) => ({ ...e, cellId: v || null }))} options={[{ value: "", label: "None" }, ...cells.map((c) => ({ value: c.id, label: c.name }))]} />
-          <Select label="Fellowship" value={edit.fellowshipId || ""} onChange={(v) => setEdit((e) => ({ ...e, fellowshipId: v || null }))} options={[{ value: "", label: "None" }, ...fellowships.map((f) => ({ value: f.id, label: f.name }))]} />
+          <Select
+            label="Role"
+            value={edit.role || "Church Member"}
+            onChange={(v) => setEdit((e) => ({ ...e, role: v as Role }))}
+            options={(modal === "add" || canManageMember(currentUser, edit as Member) ? roleOptions : ROLES).map((r) => ({ value: r, label: r }))}
+          />
+          {cellScoped ? (
+            <>
+              <Input label="Cell" value={myCell?.name || "Your cell"} disabled onChange={() => {}} />
+              <Input
+                label="Fellowship"
+                value={fellowships.find((f) => f.id === currentUser.fellowshipId)?.name || "—"}
+                disabled
+                onChange={() => {}}
+              />
+            </>
+          ) : (
+            <>
+              <Select label="Cell" value={edit.cellId || ""} onChange={(v) => setEdit((e) => ({ ...e, cellId: v || null }))} options={[{ value: "", label: "None" }, ...cells.map((c) => ({ value: c.id, label: c.name }))]} />
+              <Select label="Fellowship" value={edit.fellowshipId || ""} onChange={(v) => setEdit((e) => ({ ...e, fellowshipId: v || null }))} options={[{ value: "", label: "None" }, ...fellowships.map((f) => ({ value: f.id, label: f.name }))]} />
+            </>
+          )}
           {["Senior Pastor", "Admin"].includes(currentUser.role) && modal === "edit" && edit.id && (
             <Textarea label="Welfare / pastoral notes (Admin)" value={edit.welfareNotes || ""} onChange={(v) => setEdit((e) => ({ ...e, welfareNotes: v }))} />
           )}
           <ModalFooter>
             <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
             <Btn onClick={saveMember} disabled={saving}>{saving ? "Saving..." : "Save"}</Btn>
+          </ModalFooter>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+// ─── Member profile ────────────────────────────────────────────────────────────
+
+export function MemberProfilePage({
+  memberId,
+  members,
+  cells,
+  fellowships,
+  departments,
+  currentUser,
+  onRefresh,
+}: PageProps & { memberId: string }) {
+  const navigate = useNavigate();
+  const [member, setMember] = useState<Member | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [edit, setEdit] = useState<Partial<Member>>({});
+  const [saving, setSaving] = useState(false);
+  const isOwn = currentUser.id === memberId;
+  const roleOptions = assignableRolesFor(currentUser.role);
+  const cellScoped = isCellScopedRole(currentUser.role);
+  const myCell = cells.find((c) => c.id === currentUser.cellId);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError("");
+    api<Member>(`/members/${memberId}`)
+      .then(setMember)
+      .catch((e) => {
+        setMember(null);
+        setError(e instanceof Error ? e.message : "Failed to load profile");
+      })
+      .finally(() => setLoading(false));
+  }, [memberId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const saveMember = async () => {
+    if (!edit.id || !edit.name || !edit.email) return;
+    setSaving(true);
+    try {
+      await api(`/members/${edit.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          name: edit.name,
+          email: edit.email,
+          phone: edit.phone,
+          role: edit.role,
+          cellId: edit.cellId,
+          fellowshipId: edit.fellowshipId,
+          departmentIds: edit.departmentIds,
+          dateOfBirth: edit.dateOfBirth || null,
+        }),
+      });
+      if (canViewWelfareNotes(currentUser.role) && edit.welfareNotes !== undefined) {
+        await api(`/members/${edit.id}/welfare`, {
+          method: "PATCH",
+          body: JSON.stringify({ welfareNotes: edit.welfareNotes }),
+        });
+      }
+      setEditOpen(false);
+      load();
+      onRefresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const backTo = () => {
+    if (isOwn && !PAGE_ACCESS[currentUser.role].includes("members")) {
+      navigate("/app");
+    } else {
+      navigate("/app/members");
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <Btn variant="ghost" onClick={backTo}>
+          <ArrowLeft className="h-4 w-4" /> Back
+        </Btn>
+        <MemberListSkeleton />
+      </div>
+    );
+  }
+
+  if (error || !member) {
+    return (
+      <div className="space-y-6">
+        <Btn variant="ghost" onClick={backTo}>
+          <ArrowLeft className="h-4 w-4" /> Back
+        </Btn>
+        <Card>
+          <p className="text-sm text-destructive">{error || "Member not found"}</p>
+        </Card>
+      </div>
+    );
+  }
+
+  const cell = cells.find((c) => c.id === member.cellId);
+  const fellowship = fellowships.find((f) => f.id === member.fellowshipId);
+  const deptNames = member.departmentIds
+    .map((id) => departments.find((d) => d.id === id)?.name)
+    .filter(Boolean) as string[];
+  const canEdit = canManageMember(currentUser, member);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Btn variant="ghost" onClick={backTo}>
+          <ArrowLeft className="h-4 w-4" /> Back
+        </Btn>
+        {canEdit && (
+          <Btn
+            variant="secondary"
+            onClick={() => {
+              setEdit(member);
+              setEditOpen(true);
+            }}
+          >
+            <Edit className="h-4 w-4" /> Edit member
+          </Btn>
+        )}
+      </div>
+
+      <Card className="flex flex-col items-center gap-4 p-6 text-center sm:flex-row sm:text-left">
+        <AvatarCircle name={member.name} size="lg" variant="solid" />
+        <div className="min-w-0 flex-1">
+          <h1 className="text-2xl font-bold tracking-tight">{member.name}</h1>
+          <div className="mt-2 flex flex-wrap justify-center gap-2 sm:justify-start">
+            <Badge color="purple">{member.role}</Badge>
+            {!member.active && <Badge color="rose">Inactive</Badge>}
+            {isOwn && <Badge color="sky">Your profile</Badge>}
+          </div>
+        </div>
+      </Card>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Card>
+          <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            <Mail className="h-4 w-4" /> Contact
+          </h2>
+          <dl className="space-y-3 text-sm">
+            <div>
+              <dt className="text-muted-foreground">Email</dt>
+              <dd className="font-medium break-all">{member.email || "—"}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Phone</dt>
+              <dd className="font-medium">{member.phone || "—"}</dd>
+            </div>
+            <div>
+              <dt className="flex items-center gap-1 text-muted-foreground">
+                <Cake className="h-3.5 w-3.5" /> Date of birth
+              </dt>
+              <dd className="font-medium">{formatMemberDate(member.dateOfBirth)}</dd>
+            </div>
+            <div>
+              <dt className="flex items-center gap-1 text-muted-foreground">
+                <CalendarDays className="h-3.5 w-3.5" /> Joined
+              </dt>
+              <dd className="font-medium">{formatMemberDate(member.joinedAt)}</dd>
+            </div>
+          </dl>
+        </Card>
+
+        <Card>
+          <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            <Network className="h-4 w-4" /> Church structure
+          </h2>
+          <dl className="space-y-3 text-sm">
+            <div>
+              <dt className="text-muted-foreground">Cell</dt>
+              <dd className="font-medium">{cell?.name || "—"}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Fellowship</dt>
+              <dd className="font-medium">{fellowship?.name || "—"}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Departments</dt>
+              <dd className="font-medium">
+                {deptNames.length ? (
+                  <ul className="mt-1 list-inside list-disc">
+                    {deptNames.map((n) => (
+                      <li key={n}>{n}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  "—"
+                )}
+              </dd>
+            </div>
+          </dl>
+        </Card>
+      </div>
+
+      {member.welfareNotes && canViewWelfareNotes(currentUser.role) && !isOwn && (
+        <Card>
+          <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Pastoral / welfare notes
+          </h2>
+          <p className="whitespace-pre-wrap text-sm">{member.welfareNotes}</p>
+        </Card>
+      )}
+
+      {isOwn && (
+        <Card className="border-dashed">
+          <p className="text-sm text-muted-foreground">
+            To change your login password, go to Settings. Contact your cell or fellowship leader to update your role or
+            cell assignment.
+          </p>
+        </Card>
+      )}
+
+      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Edit Member">
+        <div className="space-y-3">
+          <Input label="Full Name" value={edit.name || ""} onChange={(v) => setEdit((e) => ({ ...e, name: v }))} />
+          <Input label="Email" value={edit.email || ""} onChange={(v) => setEdit((e) => ({ ...e, email: v }))} />
+          <Input label="Phone" value={edit.phone || ""} onChange={(v) => setEdit((e) => ({ ...e, phone: v }))} />
+          <Input
+            label="Date of birth"
+            type="date"
+            value={edit.dateOfBirth || ""}
+            onChange={(v) => setEdit((e) => ({ ...e, dateOfBirth: v || null }))}
+          />
+          <Select
+            label="Role"
+            value={edit.role || "Church Member"}
+            onChange={(v) => setEdit((e) => ({ ...e, role: v as Role }))}
+            options={roleOptions.map((r) => ({ value: r, label: r }))}
+          />
+          {cellScoped ? (
+            <>
+              <Input label="Cell" value={myCell?.name || "Your cell"} disabled onChange={() => {}} />
+              <Input
+                label="Fellowship"
+                value={fellowships.find((f) => f.id === currentUser.fellowshipId)?.name || "—"}
+                disabled
+                onChange={() => {}}
+              />
+            </>
+          ) : (
+            <>
+              <Select
+                label="Cell"
+                value={edit.cellId || ""}
+                onChange={(v) => setEdit((e) => ({ ...e, cellId: v || null }))}
+                options={[{ value: "", label: "None" }, ...cells.map((c) => ({ value: c.id, label: c.name }))]}
+              />
+              <Select
+                label="Fellowship"
+                value={edit.fellowshipId || ""}
+                onChange={(v) => setEdit((e) => ({ ...e, fellowshipId: v || null }))}
+                options={[{ value: "", label: "None" }, ...fellowships.map((f) => ({ value: f.id, label: f.name }))]}
+              />
+            </>
+          )}
+          {canViewWelfareNotes(currentUser.role) && (
+            <Textarea
+              label="Welfare / pastoral notes"
+              value={edit.welfareNotes || ""}
+              onChange={(v) => setEdit((e) => ({ ...e, welfareNotes: v }))}
+            />
+          )}
+          <ModalFooter>
+            <Btn variant="ghost" onClick={() => setEditOpen(false)}>
+              Cancel
+            </Btn>
+            <Btn onClick={saveMember} disabled={saving}>
+              {saving ? "Saving..." : "Save"}
+            </Btn>
           </ModalFooter>
         </div>
       </Modal>
@@ -1091,7 +1515,7 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
         title="Cells & Fellowships"
         subtitle="Manage structure and leadership"
         action={
-          canManageMembers(currentUser.role) ? (
+          canManageStructure(currentUser.role) ? (
             <div className="flex gap-2">
               <Btn variant="secondary" onClick={() => setFelModal(true)}><Plus className="h-4 w-4" /> Fellowship</Btn>
               <Btn onClick={() => setCellModal(true)}><Plus className="h-4 w-4" /> Cell</Btn>
@@ -1104,11 +1528,13 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-lg font-semibold text-primary">{f.name}</h2>
-              <p className="text-sm text-muted-foreground">Leader: {memberName(members, f.leaderId)}</p>
+              <p className="text-sm text-muted-foreground">
+                Leader: <MemberNameLink members={members} id={f.leaderId} className="inline font-normal" />
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <Badge color="teal">{cells.filter((c) => c.fellowshipId === f.id).length} cells</Badge>
-              {canManageMembers(currentUser.role) && (
+              {canManageStructure(currentUser.role) && (
                 <Btn variant="ghost" className="!px-2 !py-1" onClick={() => { setAssignModal({ type: "fellowship", id: f.id }); setAssignLeader(f.leaderId || ""); }}>
                   <Edit className="h-4 w-4" />
                 </Btn>
@@ -1127,9 +1553,10 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
                     </button>
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Leader: {memberName(members, c.leaderId)} · Sub: {memberName(members, c.subLeaderId)} · {cellMembers.length} members
+                    Leader: <MemberNameLink members={members} id={c.leaderId} className="inline font-normal" /> · Sub:{" "}
+                    <MemberNameLink members={members} id={c.subLeaderId} className="inline font-normal" /> · {cellMembers.length} members
                   </p>
-                  {canManageMembers(currentUser.role) && (
+                  {canManageStructure(currentUser.role) && (
                     <div className="mt-2 flex flex-wrap gap-2">
                       <Btn variant="ghost" className="!px-0 !py-1 text-xs" onClick={() => {
                         setAssignModal({ type: "cell", id: c.id });
@@ -1151,7 +1578,7 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
                           <span>{m.name}</span>
                           <div className="flex items-center gap-2">
                             <Badge color="gray">{m.role}</Badge>
-                            {canManageMembers(currentUser.role) && (
+                            {canManageStructure(currentUser.role) && (
                               <button
                                 type="button"
                                 className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive"
@@ -1285,10 +1712,16 @@ export function DepartmentsPage({ members, departments: propDepts, onRefresh }: 
               <h3 className="font-semibold">{d.name}</h3>
               <button type="button" className="rounded p-1 hover:bg-muted" onClick={() => openEdit(d)}><Edit className="h-4 w-4" /></button>
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">Head: {memberName(members, d.headId)}</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Head: <MemberNameLink members={members} id={d.headId} className="inline font-normal" />
+            </p>
             <p className="mt-2 text-sm">{d.memberIds.length + (d.headId ? 1 : 0)} serving members</p>
             <ul className="mt-3 space-y-1 text-sm">
-              {d.memberIds.slice(0, 6).map((mid) => <li key={mid}>{memberName(members, mid)}</li>)}
+              {d.memberIds.slice(0, 6).map((mid) => (
+                <li key={mid}>
+                  <MemberNameLink members={members} id={mid} className="font-normal" />
+                </li>
+              ))}
             </ul>
           </Card>
         ))}
@@ -1363,7 +1796,7 @@ function AttendanceMemberLog({
       >
         <AvatarCircle name={member.name} size="md" />
         <div className="min-w-0 flex-1">
-          <p className="font-medium">{member.name}</p>
+          <MemberNameLink members={[member]} id={member.id} />
           <p className="text-xs text-muted-foreground">{member.role}{member.phone ? ` · ${member.phone}` : ""}</p>
         </div>
         <div className="hidden shrink-0 text-right text-xs sm:block">
@@ -1408,13 +1841,15 @@ function AttendanceMemberLog({
   );
 }
 
-export function AttendancePage({ members, cells, fellowships, onRefresh }: PageProps) {
+export function AttendancePage({ members, cells, fellowships, currentUser, onRefresh }: PageProps) {
+  const cellScoped = isCellScopedRole(currentUser.role);
+  const myCell = cells.find((c) => c.id === currentUser.cellId);
   const [pageTab, setPageTab] = useState<"calendar" | "members" | "record">("calendar");
   const [mode, setMode] = useState<"cell" | "service">("cell");
   const [trends, setTrends] = useState<{ date: string; cell_name: string; present_count: number }[]>([]);
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  const [cellId, setCellId] = useState(cells[0]?.id || "");
+  const [cellId, setCellId] = useState(currentUser.cellId || cells[0]?.id || "");
   const [present, setPresent] = useState<Set<string>>(new Set());
   const [newcomers, setNewcomers] = useState<Set<string>>(new Set());
   const [guestNames, setGuestNames] = useState("");
@@ -1427,6 +1862,9 @@ export function AttendancePage({ members, cells, fellowships, onRefresh }: PageP
   useEffect(() => {
     api<typeof trends>("/attendance/trends").then(setTrends).catch(() => {});
   }, []);
+  useEffect(() => {
+    if (cellScoped) setMode("cell");
+  }, [cellScoped]);
 
   const trendChart = trends.reduce<Record<string, Record<string, number | string>>>((acc, row) => {
     const week = row.date?.slice(0, 7) || "week";
@@ -1439,6 +1877,7 @@ export function AttendancePage({ members, cells, fellowships, onRefresh }: PageP
 
   const cellMembers = members.filter((m) => m.cellId === cellId && m.active);
   const serviceMembers = members.filter((m) => m.active);
+  const scopedMembers = cellScoped ? members.filter((m) => m.cellId === currentUser.cellId) : members;
 
   const togglePresent = (id: string) => {
     const next = new Set(present);
@@ -1491,14 +1930,18 @@ export function AttendancePage({ members, cells, fellowships, onRefresh }: PageP
 
   const roster = mode === "cell" ? cellMembers : serviceMembers;
 
-  const filteredMembers = members
+  const filteredMembers = scopedMembers
     .filter((m) => m.active)
     .filter((m) => !memberSearch || m.name.toLowerCase().includes(memberSearch.toLowerCase()) || m.role.toLowerCase().includes(memberSearch.toLowerCase()))
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <div className="space-y-6">
-      <PageHeader {...pageHeaderProps("attendance")} title="Attendance" subtitle="View attendance by date, member, or record a new meeting" />
+      <PageHeader
+        {...pageHeaderProps("attendance")}
+        title="Attendance"
+        subtitle={cellScoped ? `Cell attendance for ${myCell?.name || "your cell"}` : "View attendance by date, member, or record a new meeting"}
+      />
       <TabBar
         tabs={[
           { id: "calendar" as const, label: "Calendar" },
@@ -1511,20 +1954,25 @@ export function AttendancePage({ members, cells, fellowships, onRefresh }: PageP
 
       {pageTab === "record" && (
         <>
-      <TabBar
-        tabs={[
-          { id: "cell" as const, label: "Cell Meeting" },
-          { id: "service" as const, label: "Sunday Service" },
-        ]}
-        value={mode}
-        onChange={setMode}
-      />
+      {canRecordServiceAttendance(currentUser.role) && (
+        <TabBar
+          tabs={[
+            { id: "cell" as const, label: "Cell Meeting" },
+            { id: "service" as const, label: "Sunday Service" },
+          ]}
+          value={mode}
+          onChange={setMode}
+        />
+      )}
       <Card>
         <h2 className="mb-4 font-semibold">{mode === "cell" ? "Record Cell Attendance" : "Record Service Attendance"}</h2>
         <div className="grid gap-4 sm:grid-cols-2">
           <Input label="Date" type="date" value={date} onChange={setDate} />
-          {mode === "cell" && (
+          {mode === "cell" && !cellScoped && (
             <Select label="Cell" value={cellId} onChange={setCellId} options={cells.map((c) => ({ value: c.id, label: c.name }))} />
+          )}
+          {mode === "cell" && cellScoped && myCell && (
+            <Input label="Cell" value={myCell.name} disabled onChange={() => {}} />
           )}
         </div>
         <div className="mt-4 space-y-2">
@@ -1581,6 +2029,8 @@ export function AttendancePage({ members, cells, fellowships, onRefresh }: PageP
           members={members}
           cells={cells}
           fellowships={fellowships}
+          currentUser={currentUser}
+          onRecordUpdated={load}
         />
       )}
 
@@ -1618,6 +2068,7 @@ export function AttendancePage({ members, cells, fellowships, onRefresh }: PageP
 // ─── Events ────────────────────────────────────────────────────────────────────
 
 export function EventsPage({ currentUser, onRefresh }: PageProps) {
+  const canCreateEvents = canManageEvents(currentUser.role);
   const [events, setEvents] = useState<{ id: string; title: string; date: string; time: string; location: string; description: string; rsvpIds: string[] }[]>([]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({ title: "", date: "", time: "", location: "", description: "" });
@@ -1642,7 +2093,18 @@ export function EventsPage({ currentUser, onRefresh }: PageProps) {
 
   return (
     <div className="space-y-6">
-      <PageHeader {...pageHeaderProps("events")} title="Events" subtitle="Church calendar and RSVPs" action={<Btn onClick={() => setModal(true)}><Plus className="h-4 w-4" /> New Event</Btn>} />
+      <PageHeader
+        {...pageHeaderProps("events")}
+        title="Events"
+        subtitle={canCreateEvents ? "Church calendar and RSVPs" : "View church events and RSVP"}
+        action={
+          canCreateEvents ? (
+            <Btn onClick={() => setModal(true)}>
+              <Plus className="h-4 w-4" /> New Event
+            </Btn>
+          ) : undefined
+        }
+      />
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-1">
           <h2 className="mb-3 font-semibold">Calendar</h2>
@@ -1651,7 +2113,7 @@ export function EventsPage({ currentUser, onRefresh }: PageProps) {
             selectedDate={selectedDate}
             onSelectDate={(d) => {
               setSelectedDate(d);
-              if (d) setForm((f) => ({ ...f, date: d.toISOString().slice(0, 10) }));
+              if (d && canCreateEvents) setForm((f) => ({ ...f, date: d.toISOString().slice(0, 10) }));
             }}
           />
           <div className="mt-4 space-y-2">
@@ -1684,6 +2146,7 @@ export function EventsPage({ currentUser, onRefresh }: PageProps) {
           ))}
         </div>
       </div>
+      {canCreateEvents && (
       <Modal open={modal} onClose={() => setModal(false)} title="Create Event">
         <div className="space-y-3">
           <Input label="Title" value={form.title} onChange={(v) => setForm((f) => ({ ...f, title: v }))} />
@@ -1694,6 +2157,7 @@ export function EventsPage({ currentUser, onRefresh }: PageProps) {
           <Btn onClick={create}>Create</Btn>
         </div>
       </Modal>
+      )}
     </div>
   );
 }
@@ -1862,7 +2326,7 @@ export function SettingsPage({ members, settings: propSettings, currentUser, onR
   const changePassword = async () => {
     if (pwForm.next !== pwForm.confirm) { setPwMsg("Passwords do not match"); return; }
     try {
-      if (supabaseConfigured) {
+      if (useSupabaseForAuth()) {
         await changeSupabasePassword(pwForm.current, pwForm.next, currentUser.email);
       } else {
         await api("/auth/change-password", { method: "POST", body: JSON.stringify({ currentPassword: pwForm.current, newPassword: pwForm.next }) });
@@ -2742,10 +3206,12 @@ interface MediaItem {
   topic: string;
   date: string;
   fileUrl: string | null;
+  status?: "pending" | "approved" | "rejected";
 }
 
 export function MediaPage({ currentUser }: PageProps) {
   const [media, setMedia] = useState<MediaItem[]>([]);
+  const [capabilities, setCapabilities] = useState({ canUpload: false, canApprove: false, canViewPending: false });
   const [search, setSearch] = useState("");
   const [uploadOpen, setUploadOpen] = useState(false);
   const [form, setForm] = useState({ title: "", type: "video", speaker: "", series: "", topic: "", date: "", shareTarget: "all", shareTargetId: "" });
@@ -2756,6 +3222,12 @@ export function MediaPage({ currentUser }: PageProps) {
     const params = search ? `?search=${encodeURIComponent(search)}` : "";
     api<MediaItem[]>(`/media${params}`).then(setMedia).catch(() => {});
   }, [search]);
+
+  useEffect(() => {
+    api<{ canUpload: boolean; canApprove: boolean; canViewPending: boolean }>("/media/capabilities")
+      .then(setCapabilities)
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(load, 300);
@@ -2776,18 +3248,35 @@ export function MediaPage({ currentUser }: PageProps) {
     if (file) fd.append("file", file);
     await api("/media", { method: "POST", body: fd });
     setUploadOpen(false);
-    setForm({ title: "", type: "video", speaker: "", series: "", topic: "", date: "" });
+    setForm({ title: "", type: "video", speaker: "", series: "", topic: "", date: "", shareTarget: "all", shareTargetId: "" });
     setFile(null);
     load();
   };
+
+  const setMediaStatus = async (id: string, status: "approved" | "rejected") => {
+    await api(`/media/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
+    load();
+  };
+
+  const isPastoral = canApproveMedia(currentUser.role);
 
   return (
     <div className="space-y-6">
       <PageHeader
         {...pageHeaderProps("media")}
         title="Media Library"
-        subtitle="Sermons, notes, and teaching resources"
-        action={canUploadMedia(currentUser.role) ? <Btn onClick={() => setUploadOpen(true)}><Upload className="h-4 w-4" /> Upload</Btn> : undefined}
+        subtitle={
+          isPastoral || capabilities.canUpload
+            ? "Sermons, notes, and teaching resources"
+            : "Approved sermons and teaching resources"
+        }
+        action={
+          capabilities.canUpload ? (
+            <Btn onClick={() => setUploadOpen(true)}>
+              <Upload className="h-4 w-4" /> Upload
+            </Btn>
+          ) : undefined
+        }
       />
       <div className="relative">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -2801,10 +3290,14 @@ export function MediaPage({ currentUser }: PageProps) {
             <div className="flex gap-4">
               <IconBox icon={m.type === "video" || m.type === "audio" ? Play : FileText} tone={mediaTone} size="lg" className="h-14 w-14 rounded-xl" />
               <div>
-                <h3 className="font-semibold">{m.title}</h3>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-semibold">{m.title}</h3>
+                  {m.status === "pending" && <Badge color="orange">Pending approval</Badge>}
+                  {m.status === "rejected" && <Badge color="rose">Rejected</Badge>}
+                </div>
                 <p className="text-sm text-muted-foreground">{m.speaker} · {m.series}</p>
                 <p className="text-xs text-muted-foreground">{m.date} · {m.topic}</p>
-                {m.fileUrl && (
+                {m.fileUrl && m.status !== "rejected" && (
                   <div className="mt-2 flex flex-wrap gap-2">
                     {(m.type === "video" || m.type === "audio") && (
                       <Btn variant="accent" className="!px-2 !py-1 text-xs" onClick={() => setPlaying(m)}>
@@ -2814,6 +3307,12 @@ export function MediaPage({ currentUser }: PageProps) {
                     <a href={m.fileUrl} download className="inline-flex items-center gap-1 text-sm text-accent">
                       <Download className="h-4 w-4" /> Download
                     </a>
+                  </div>
+                )}
+                {capabilities.canApprove && m.status === "pending" && (
+                  <div className="mt-2 flex gap-2">
+                    <Btn variant="accent" className="!px-2 !py-1 text-xs" onClick={() => setMediaStatus(m.id, "approved")}>Approve</Btn>
+                    <Btn variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => setMediaStatus(m.id, "rejected")}>Reject</Btn>
                   </div>
                 )}
               </div>
@@ -2863,8 +3362,7 @@ interface CellReport {
   period: string;
   attendanceCount: number;
   newVisitors: number;
-  prayerPoints: string;
-  challenges: string;
+  description: string;
   status: "draft" | "submitted" | "approved" | "overdue";
   pastorComment?: string;
   submittedAt: string;
@@ -2872,7 +3370,7 @@ interface CellReport {
 
 export function ReportSubmissionsPage({ members, cells, departments, currentUser, onRefresh }: PageProps) {
   const [reports, setReports] = useState<CellReport[]>([]);
-  const [form, setForm] = useState({ attendanceCount: "", newVisitors: "", prayerPoints: "", challenges: "", dueDate: "" });
+  const [form, setForm] = useState({ attendanceCount: "", newVisitors: "", description: "", dueDate: "" });
   const [approveComment, setApproveComment] = useState<Record<string, string>>({});
   const isDeptHead = departments.some((d) => d.headId === currentUser.id);
 
@@ -2898,12 +3396,11 @@ export function ReportSubmissionsPage({ members, cells, departments, currentUser
         period: `Week of ${new Date().toISOString().slice(0, 10)}`,
         attendanceCount: Number(form.attendanceCount) || 0,
         newVisitors: Number(form.newVisitors) || 0,
-        prayerPoints: form.prayerPoints,
-        challenges: form.challenges,
+        description: form.description,
         dueDate: form.dueDate || undefined,
       }),
     });
-    setForm({ attendanceCount: "", newVisitors: "", prayerPoints: "", challenges: "" });
+    setForm({ attendanceCount: "", newVisitors: "", description: "", dueDate: "" });
     load();
     onRefresh();
   };
@@ -2932,8 +3429,14 @@ export function ReportSubmissionsPage({ members, cells, departments, currentUser
             <Input label="Attendance Count" value={form.attendanceCount} onChange={(v) => setForm((r) => ({ ...r, attendanceCount: v }))} />
             <Input label="New Visitors" value={form.newVisitors} onChange={(v) => setForm((r) => ({ ...r, newVisitors: v }))} />
             <Input label="Due date" type="date" value={form.dueDate} onChange={(v) => setForm((r) => ({ ...r, dueDate: v }))} />
-            <Textarea label="Prayer Points" value={form.prayerPoints} onChange={(v) => setForm((r) => ({ ...r, prayerPoints: v }))} />
-            <Textarea label="Challenges" value={form.challenges} onChange={(v) => setForm((r) => ({ ...r, challenges: v }))} />
+            <div className="sm:col-span-2">
+              <Textarea
+                label="Description"
+                value={form.description}
+                onChange={(v) => setForm((r) => ({ ...r, description: v }))}
+                rows={4}
+              />
+            </div>
           </div>
           <Btn className="mt-4" onClick={submit}>Submit Report</Btn>
         </Card>
@@ -2946,8 +3449,7 @@ export function ReportSubmissionsPage({ members, cells, departments, currentUser
               <p className="text-sm text-muted-foreground">By {memberName(members, r.submitterId)}</p>
               {r.cellId && <p className="text-xs text-muted-foreground">Cell: {cells.find((c) => c.id === r.cellId)?.name}</p>}
               <p className="mt-2 text-sm">Attendance: {r.attendanceCount} · Visitors: {r.newVisitors}</p>
-              <p className="text-sm">Prayer: {r.prayerPoints}</p>
-              <p className="text-sm">Challenges: {r.challenges}</p>
+              {r.description && <p className="mt-2 whitespace-pre-wrap text-sm">{r.description}</p>}
               {r.pastorComment && <p className="mt-2 text-sm text-accent">Pastor: {r.pastorComment}</p>}
             </div>
             <Badge color={r.status === "approved" ? "teal" : r.status === "overdue" ? "coral" : "purple"}>{r.status}</Badge>

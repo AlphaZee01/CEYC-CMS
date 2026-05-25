@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { cn } from "@/components/church/ui";
+import { cn } from "@/lib/utils";
 
 function initialsFromName(name: string) {
   return name
@@ -47,11 +47,11 @@ export function ChurchBrand({
   const initialsBadge = (
     <div
       className={cn(
-        "flex shrink-0 items-center justify-center rounded-lg font-bold",
+        "flex shrink-0 items-center justify-center rounded-xl font-bold",
         logoSize,
         isHeader
           ? "bg-white/20 text-white ring-2 ring-white/25"
-          : "bg-[hsl(var(--sidebar-primary))] text-white"
+          : "bg-primary/10 text-primary ring-1 ring-primary/20"
       )}
     >
       {initialsFromName(name)}
@@ -67,9 +67,9 @@ export function ChurchBrand({
       referrerPolicy="no-referrer"
       onError={() => setLogoFailed(true)}
       className={cn(
-        "shrink-0 rounded-lg object-contain",
+        "shrink-0 rounded-xl object-contain",
         logoSize,
-        isHeader ? "bg-white p-1 shadow-sm ring-2 ring-white/40" : "bg-white p-0.5 shadow-sm"
+        isHeader ? "bg-white p-1 shadow-sm ring-2 ring-white/40" : "bg-white p-0.5 shadow-sm ring-1 ring-border"
       )}
     />
   ) : (
@@ -95,13 +95,13 @@ export function ChurchBrand({
         "truncate text-xs leading-snug",
         layout === "stacked" && "whitespace-normal text-center",
         isHeader && layout === "row" && "hidden sm:block",
-        isHeader ? "text-white/70" : "opacity-70"
+        isHeader ? "text-white/70" : "text-muted-foreground"
       )}
     >
       {tagline}
     </p>
   ) : !isHeader ? (
-    <p className={cn("text-xs opacity-70", layout === "stacked" && "text-center")}>Church Management</p>
+    <p className={cn("text-xs text-muted-foreground", layout === "stacked" && "text-center")}>Church Management</p>
   ) : null;
 
   if (layout === "stacked") {

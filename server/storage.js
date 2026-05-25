@@ -3,7 +3,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getAppUrl } from "./app-url.js";
 import { getSupabaseAdminClient } from "./supabase.js";
-import { usePostgres } from "./store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOAD_DIR = path.join(__dirname, "..", "uploads");
@@ -27,7 +26,7 @@ async function ensureBucket(admin) {
 /** Upload a local file; returns public URL (Supabase Storage on production, /uploads locally). */
 export async function persistUploadedFile(localPath, folder, originalName, mimeType) {
   const admin = getSupabaseAdminClient();
-  if (admin && usePostgres) {
+  if (admin && process.env.USE_SUPABASE_STORAGE === "true") {
     await ensureBucket(admin);
     const objectPath = `${folder}/${Date.now()}-${safeName(originalName || path.basename(localPath))}`;
     const buffer = fs.readFileSync(localPath);

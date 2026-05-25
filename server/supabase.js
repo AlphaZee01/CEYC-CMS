@@ -1,15 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
-import { usePostgres } from "./store.js";
 
 export const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 export const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 export const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-/** Use Supabase Auth when connected to Supabase Postgres (or explicitly enabled). */
+/** Use Supabase Auth when explicitly enabled and configured. */
 export function useSupabaseAuth() {
   if (process.env.USE_SUPABASE_AUTH === "false") return false;
-  if (process.env.USE_SUPABASE_AUTH === "true") return !!(supabaseUrl && supabaseAnonKey);
-  return usePostgres && !!(supabaseUrl && supabaseAnonKey);
+  return process.env.USE_SUPABASE_AUTH === "true" && !!(supabaseUrl && supabaseAnonKey);
 }
 
 let authClient;

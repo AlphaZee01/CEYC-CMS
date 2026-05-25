@@ -1,5 +1,128 @@
 # Changelog
 
+## [2026-05-25] — Attendance calendar syntax fix
+
+### Fixed
+- **AttendanceCalendar.tsx** — corrected JSX closing tags in the view-mode roster (`groups.map` ternary branch), which caused Vite “Unterminated regexp literal” / 500 on module load
+
+## [2026-05-25] — Member profile pages
+
+### Added
+- **Member profile** at `/app/members/:id` — contact details, role, cell, fellowship, departments, and join date
+- **GET `/api/members/:id`** — scoped by RBAC; welfare notes only for Senior Pastor / Admin viewing others
+- **Members directory** — member names link to their profile
+- **Sidebar** — tap your name/avatar to open your own profile (all roles, including Cell/Church Member)
+
+### Changed
+- Profile edit from the profile page when the viewer can manage that member (same rules as the members list)
+
+## [2026-05-25] — Cell Leader attendance edit & approved media access
+
+### Added
+- **Edit cell attendance**: Cell Leaders can update present/absent for their cell meetings from the attendance calendar (Edit button on cell records)
+- **Media library access**: Cell Leaders can browse **pastor-approved** media in the Media Library nav page
+- **Media approval workflow**: uploads from the Media & Technical team start as `pending`; Senior/Associate Pastor approve or reject before members and cell leaders can access
+
+### Changed
+- `PUT /api/attendance/:id` — update cell attendance with cell-scoped RBAC
+- `GET /api/media` — cell leaders and members only see `approved` items
+- Media team (Media & Technical department members/heads) can upload; pastors auto-approve their own uploads
+
+## [2026-05-25] — Cell reports use description field
+
+### Changed
+- **Cell reports**: replaced separate "Prayer Points" and "Challenges" fields with a single **Description** field in the form, API, and report display
+- **Database**: added `description` column with migration that merges existing prayer points and challenges into description
+
+## [2026-05-25] — Mobile bottom nav no longer blocks content
+
+### Fixed
+- **Bottom nav overlap**: increased mobile bottom padding via shared `--mobile-nav-offset` utility (`pb-mobile-nav`)
+- **Chat layout**: removed negative bottom margin and viewport-height hack; chat now fills the main content area above the nav
+- **Chat input/footer**: removed duplicate bottom padding that pushed content inconsistently
+
+## [2026-05-25] — Cell Leader events (view only)
+
+### Changed
+- **Cell Leaders and Sub-cell Leaders** can view church events, calendar, details, and RSVP — but cannot create or delete events
+- **Server**: `POST /api/events` and `DELETE /api/events/:id` require `canManageEvents` (Pastors, Admin, Fellowship Leader)
+- **Events page**: "New Event" button and create modal hidden for roles without event management permission
+
+## [2026-05-25] — Chat stays open after sending
+
+### Fixed
+- **Chat thread closing after send**: stopped `scrollIntoView` from scrolling the outer app layout on mobile; chat page main area is now non-scrollable
+- **Send UX**: messages append immediately after send; conversation/thread refresh runs silently without replacing the thread with a loading skeleton
+
+## [2026-05-25] — Server startup syntax error
+
+### Fixed
+- **`server/index.js`**: invalid mix of `??` and `||` when resolving fellowship on member create crashed the API server on boot (500 on `/api/public/config`, `/api/public/branding`, and login)
+
+## [2026-05-25] — Cell Leader permissions (RBAC)
+
+### Added
+- **Server RBAC**: Cell Leaders and Sub-cell Leaders can manage members in their own cell only, assign roles below Cell Leader, mark cell attendance, message cell members and leadership, and submit cell reports
+- **Frontend RBAC** (`src/lib/rbac.ts`): mirrors server rules for member management, attendance, and role assignment in the UI
+- **Dashboard**: cell-scoped stat cards for Cell Leaders (cell member count, last meeting, cell name)
+- **Attendance**: service attendance tab hidden for cell-scoped roles; cell field locked to their cell
+- **Reports**: cell report submissions scoped to the leader's cell; list filtered by cell
+
+### Security
+- Cell Leaders cannot edit members above their rank, move members out of their cell, record service attendance, or submit reports for other cells
+
+## [2026-05-25] — Dashboard welcome includes role
+
+### Changed
+- Dashboard subtitle now shows the signed-in user's role (e.g. `Welcome back, Sis. Chioma Nwosu · Cell Leader`)
+
+## [2026-05-25] — Sign-in 401 / dashboard not loading
+
+### Fixed
+- **Auth mode mismatch**: frontend now reads `authMode` from `GET /api/public/config` (server is the single source of truth) instead of relying only on `VITE_USE_SUPABASE_AUTH`
+- **Login 401 loop**: failed `/api/auth/me` on the login page no longer clears the Supabase session immediately
+- **Supabase login flow**: after sign-in, session is loaded directly instead of racing with auth state listeners
+- **`authApi.login`** uses `publicApi` (no bearer token required)
+
+### Note
+- With `USE_SUPABASE_AUTH=true`, run `npm run auth:sync -- --reset-passwords` after `db:reset` so Supabase passwords match `SEED_PASSWORD`
+- **Restart `npm run dev`** after changing `.env`
+
+## [2026-05-25] — Modern UI refresh
+
+### Changed
+- **Design system**: Plus Jakarta Sans typography, softer palette, rounded cards with subtle shadows, refined buttons and form fields
+- **App shell**: light sidebar with grouped navigation (Overview, People, Ministry, Operations, Admin), clean header without heavy gradient, user card in sidebar footer
+- **Login page**: split-screen layout on desktop, clearer form hierarchy, demo credentials in a dedicated info box (not pre-filled)
+- **Dashboard**: updated stat cards and section headers
+- **Mobile nav**: cleaner floating tab bar
+- **Toasts**: Sonner notifications enabled app-wide
+
+## [2026-05-25] — Sign-in auth mode mismatch
+
+### Fixed
+- **Sign-in 401 after Supabase login**: frontend no longer uses Supabase Auth just because `VITE_SUPABASE_*` keys exist — auth requires `VITE_USE_SUPABASE_AUTH=true` to match server `USE_SUPABASE_AUTH=true`; otherwise local JWT via `/api/auth/login` is used
+
+### Fixed
+- **`better-sqlite3@12`** — upgraded for **Node.js 24** prebuilt binaries (v11 had no prebuild for `NODE_MODULE_VERSION 137`, causing "Could not locate the bindings file" on `npm run dev`)
+
+### Fixed
+- **`npm run db:reset`** deletes the SQLite file before migrations run (avoids failed ALTER on stale databases)
+- SQLite migration for `auth_user_id` no longer uses `ADD COLUMN … UNIQUE` (unsupported in SQLite)
+
+## [2026-05-25] — Remove PostgreSQL
+
+### Removed
+- **PostgreSQL / Supabase Postgres** support — app uses **SQLite only** (`data/church.db`)
+- `pg` dependency, `server/schema.postgres.sql`, `server/migrate-pg.js`, and `scripts/test-supabase-connection.mjs`
+- `npm run db:migrate:pg`, `db:reset:pg`, and `db:test:pg` scripts
+- `DATABASE_URL` and `DATABASE_SSL` from `.env.example` and `render.yaml`
+
+### Changed
+- **Supabase Auth** is opt-in via `USE_SUPABASE_AUTH=true` (no longer tied to `DATABASE_URL`)
+- **Supabase Storage** for uploads is opt-in via `USE_SUPABASE_STORAGE=true`
+- README and deployment docs updated for SQLite-only setup
+
 ## [2026-05-24] — Sign-in debug logs
 
 ### Added

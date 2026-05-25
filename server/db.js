@@ -240,6 +240,9 @@ export function initSchema() {
       share_target TEXT,
       share_target_id TEXT,
       uploaded_by TEXT REFERENCES members(id),
+      status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+      approved_by TEXT REFERENCES members(id),
+      approved_at TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -253,8 +256,7 @@ export function initSchema() {
       period TEXT NOT NULL,
       attendance_count INTEGER DEFAULT 0,
       new_visitors INTEGER DEFAULT 0,
-      prayer_points TEXT,
-      challenges TEXT,
+      description TEXT,
       status TEXT DEFAULT 'draft' CHECK (status IN ('draft', 'submitted', 'approved', 'overdue')),
       pastor_comment TEXT,
       due_date TEXT,
@@ -338,7 +340,39 @@ function migrateColumns(db) {
   }
   const userCols = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
   if (!userCols.includes("auth_user_id")) {
-    db.exec("ALTER TABLE users ADD COLUMN auth_user_id TEXT UNIQUE");
+    db.exec("ALTER TABLE users ADD COLUMN auth_user_id TEXT");
+    db.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_auth_user_id ON users(auth_user_id) WHERE auth_user_id IS NOT NULL"
+    );
+  }
+  const reportCols = db.prepare("PRAGMA table_info(cell_reports)").all().map((c) => c.name);
+  if (!reportCols.includes("description")) {
+    db.exec("ALTER TABLE cell_reports ADD COLUMN description TEXT");
+    if (reportCols.includes("prayer_points") || reportCols.includes("challenges")) {
+      db.exec(`
+        UPDATE cell_reports SET description = TRIM(
+          CASE
+            WHEN COALESCE(prayer_points, '') != '' AND COALESCE(challenges, '') != ''
+              THEN prayer_points || char(10) || char(10) || challenges
+            WHEN COALESCE(prayer_points, '') != '' THEN prayer_points
+            WHEN COALESCE(challenges, '') != '' THEN challenges
+            ELSE ''
+          END
+        )
+        WHERE description IS NULL OR description = ''
+      `);
+    }
+  }
+  const mediaCols = db.prepare("PRAGMA table_info(media_items)").all().map((c) => c.name);
+  if (!mediaCols.includes("status")) {
+    db.exec("ALTER TABLE media_items ADD COLUMN status TEXT DEFAULT 'approved'");
+    db.exec("UPDATE media_items SET status = 'approved' WHERE status IS NULL");
+  }
+  if (!mediaCols.includes("approved_by")) {
+    db.exec("ALTER TABLE media_items ADD COLUMN approved_by TEXT REFERENCES members(id)");
+  }
+  if (!mediaCols.includes("approved_at")) {
+    db.exec("ALTER TABLE media_items ADD COLUMN approved_at TEXT");
   }
 }
 
