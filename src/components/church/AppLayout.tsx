@@ -191,10 +191,18 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
             </button>
 
             <div className="min-w-0 flex-1">
-              <p className="truncate text-base font-semibold text-foreground lg:hidden">{pageLabel(activePage)}</p>
-              <p className="hidden truncate text-sm text-muted-foreground lg:block">
-                Welcome back, <span className="font-medium text-foreground">{user.name.split(" ")[0]}</span>
-              </p>
+              <ChurchBrand
+                name={settings.name}
+                logoUrl={settings.logoUrl}
+                tagline={settings.tagline}
+                size="sm"
+                theme="sidebar"
+                showDefaultTagline={false}
+                className={cn(
+                  "min-w-0",
+                  settings.tagline && "[&_p:last-child]:hidden sm:[&_p:last-child]:block"
+                )}
+              />
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-2">

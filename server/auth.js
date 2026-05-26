@@ -4,7 +4,8 @@ import { getDb } from "./store.js";
 import { memberToJson } from "./db.js";
 import { sendPasswordResetEmail, isEmailConfigured } from "./email.js";
 import { getAppUrl } from "./app-url.js";
-import { canAccessPage, resolveUserPages } from "./rbac.js";
+import { canAccessPage, resolveEffectivePages } from "./rbac.js";
+import { getMemberDepartmentAbilities } from "./department-abilities.js";
 import { useSupabaseAuth, verifySupabaseAccessToken } from "./supabase.js";
 import { updateSupabaseAuthPassword } from "./auth-sync.js";
 
@@ -23,11 +24,13 @@ async function loadUserContext(db, userRow) {
   const deptRows = await db
     .prepare("SELECT department_id FROM member_departments WHERE member_id = ?")
     .all(userRow.member_id);
+  const departmentAbilities = await getMemberDepartmentAbilities(db, userRow.member_id);
   return {
     userId: userRow.id,
     email: userRow.email,
     accessLevel: userRow.access_level,
     authUserId: userRow.auth_user_id || null,
+    departmentAbilities,
     member: memberToJson(
       {
         id: userRow.member_id,
@@ -110,13 +113,26 @@ export async function authMiddleware(req, res, next) {
   }
 }
 
+export function resolvePagesForUser(user) {
+  return resolveEffectivePages(user.member.role, user.accessLevel, user.departmentAbilities || []);
+}
+
 export function requirePage(page) {
   return (req, res, next) => {
-    if (!canAccessPage(req.user.member.role, page, req.user.accessLevel)) {
+    if (!canAccessPage(req.user.member.role, page, req.user.accessLevel, req.user.departmentAbilities)) {
       return res.status(403).json({ error: "Access denied" });
     }
     next();
   };
+}
+
+/** Allow members page managers or a member editing their own profile. */
+export function requireMembersPageOrSelf(req, res, next) {
+  if (req.params.id && req.user?.member?.id === req.params.id) return next();
+  if (!canAccessPage(req.user.member.role, "members", req.user.accessLevel, req.user.departmentAbilities)) {
+    return res.status(403).json({ error: "Access denied" });
+  }
+  next();
 }
 
 export async function changePassword(userId, currentPassword, newPassword, authUserId = null) {

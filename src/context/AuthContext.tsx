@@ -15,6 +15,7 @@ import { authLog, authLogError, authLogStart, authLogTimed } from "@/lib/auth-lo
 interface AuthState {
   user: AuthUser | null;
   pages: PageId[];
+  departmentAbilities: string[];
   branding: ChurchBranding;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
@@ -41,17 +42,25 @@ function applyBranding(
 function applySession(
   setUser: (u: AuthUser | null) => void,
   setPages: (p: PageId[]) => void,
+  setDepartmentAbilities: (a: string[]) => void,
   setBranding: (b: ChurchBranding) => void,
-  data: { user: unknown; pages: string[]; branding?: { name: string; tagline?: string; logoUrl?: string | null } }
+  data: {
+    user: unknown;
+    pages: string[];
+    departmentAbilities?: string[];
+    branding?: { name: string; tagline?: string; logoUrl?: string | null };
+  }
 ) {
   setUser(data.user as AuthUser);
   setPages(data.pages as PageId[]);
+  setDepartmentAbilities(data.departmentAbilities || []);
   applyBranding(setBranding, data.branding);
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [pages, setPages] = useState<PageId[]>([]);
+  const [departmentAbilities, setDepartmentAbilities] = useState<string[]>([]);
   const [branding, setBranding] = useState<ChurchBranding>(getCachedBranding);
   const [loading, setLoading] = useState(true);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
@@ -59,6 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const clearSession = useCallback(async () => {
     setUser(null);
     setPages([]);
+    setDepartmentAbilities([]);
     setToken(null);
     if (useSupabaseForAuth()) await clearStaleSupabaseSession();
   }, []);
@@ -69,7 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshPromiseRef.current = (async () => {
       try {
         const data = await authLogTimed("GET /api/auth/me", () => authApi.me());
-        applySession(setUser, setPages, setBranding, data);
+        applySession(setUser, setPages, setDepartmentAbilities, setBranding, data);
         authLog("Session loaded", (data.user as AuthUser)?.member?.email);
       } catch (err) {
         const message = err instanceof Error ? err.message : "";
@@ -108,6 +118,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (event === "SIGNED_OUT" || event === "USER_DELETED") {
               setUser(null);
               setPages([]);
+              setDepartmentAbilities([]);
               return;
             }
 
@@ -116,6 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               else {
                 setUser(null);
                 setPages([]);
+                setDepartmentAbilities([]);
               }
               return;
             }
@@ -127,6 +139,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (!session) {
               setUser(null);
               setPages([]);
+              setDepartmentAbilities([]);
             }
           });
 
@@ -164,6 +177,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(u as AuthUser);
     const me = await authLogTimed("GET /api/auth/me", () => authApi.me());
     setPages(me.pages as PageId[]);
+    setDepartmentAbilities(me.departmentAbilities || []);
     applyBranding(setBranding, me.branding);
     authLog("Sign-in complete");
   };
@@ -173,11 +187,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(null);
     setUser(null);
     setPages([]);
+    setDepartmentAbilities([]);
     setBranding(DEFAULT_BRANDING);
   };
 
   return (
-    <AuthContext.Provider value={{ user, pages, branding, loading, login, logout, refresh }}>
+    <AuthContext.Provider value={{ user, pages, departmentAbilities, branding, loading, login, logout, refresh }}>
       {children}
     </AuthContext.Provider>
   );

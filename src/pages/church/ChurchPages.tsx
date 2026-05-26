@@ -53,20 +53,31 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
+import { toast } from "sonner";
 import { api, exportCSV } from "@/lib/api";
 import { changeSupabasePassword } from "@/lib/supabase";
 import { useSupabaseForAuth } from "@/lib/auth-mode";
 import { CURRENCY_SYMBOL, formatCurrency } from "@/lib/utils";
 import { Card, Btn, Badge, Input, Select, Textarea, Modal, PageHeader, TabBar, ModalFooter, IconBox, AvatarCircle, cn } from "@/components/church/ui";
 import { DashboardSkeleton, MemberListSkeleton } from "@/components/church/skeletons";
-import { CHART_COLORS, ICON_TONES, ICON_TONE_LIST, type IconTone } from "@/lib/icon-colors";
+import { CHART_COLORS, ICON_TONES, ICON_TONE_LIST, pieSegmentColor, type IconTone } from "@/lib/icon-colors";
 import { pageHeaderProps } from "@/lib/page-icons";
 import {
   assignableRolesFor,
   canCreateMembers,
   canManageMember,
+  canEditMemberProfile,
   canRecordServiceAttendance,
   canManageEvents,
+  canManageDepartments,
+  canManageEventsForUser,
+  canManageTasksForUser,
+  canPostAnnouncementsForUser,
+  canSubmitDepartmentReport,
+  canManagePrayerForUser,
+  canManageDiscipleshipForUser,
+  canRecordServiceAttendanceForUser,
+  canConfirmEventProgramme,
   canEditCellAttendance,
   canApproveMedia,
   isCellScopedRole,
@@ -78,6 +89,8 @@ import { EventCalendar } from "@/components/church/EventCalendar";
 import { AttendanceCalendarView, type AttendanceRecord } from "@/components/church/AttendanceCalendar";
 import { ChatApp } from "@/components/church/ChatApp";
 import { PAGE_META, type Member, type Cell, type Fellowship, type Department, type PageId, type Role } from "@/types/church";
+import { useAuth } from "@/context/AuthContext";
+import { DEPARTMENT_ABILITIES, ABILITY_LABELS, getPresetAbilitiesForName, type DepartmentAbility } from "@/lib/department-abilities";
 
 export { CHART_COLORS };
 
@@ -382,7 +395,7 @@ function PastorDashboard({
   return (
     <div className="space-y-6">
       {/* Church at a glance */}
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard label="Members" value={overview.counts.members} icon={Users} tone="indigo" sub={overview.counts.newMembersThisMonth ? `+${overview.counts.newMembersThisMonth} this month` : undefined} />
         <StatCard label="Cells" value={overview.counts.cells} icon={Network} tone="cyan" />
         <StatCard label="Fellowships" value={overview.counts.fellowships} icon={Building2} tone="violet" />
@@ -391,14 +404,14 @@ function PastorDashboard({
         ) : (
           <StatCard label="Last Service" value="—" icon={Church} tone="blue" sub="No records yet" />
         )}
-        {lastServiceNewcomers.total > 0 ? (
-          <StatCard label="New at Service" value={lastServiceNewcomers.total} icon={UserPlus} tone="emerald" sub="last Sunday" />
-        ) : overview.showFinances && lastOffering ? (
-          <StatCard label="Last Offering" value={formatCurrency(lastOffering.total)} icon={HandCoins} tone="amber" sub={lastOffering.date} />
-        ) : (
-          <StatCard label="Departments" value={overview.counts.departments} icon={Building2} tone="orange" />
-        )}
+        <StatCard label="Departments" value={overview.counts.departments} icon={Building2} tone="orange" />
         <StatCard label="Prayer Requests" value={overview.prayersSummary.pending} icon={Heart} tone="rose" sub="awaiting prayer" />
+        {lastServiceNewcomers.total > 0 && (
+          <StatCard label="New at Service" value={lastServiceNewcomers.total} icon={UserPlus} tone="emerald" sub="last Sunday" />
+        )}
+        {overview.showFinances && lastOffering && (
+          <StatCard label="Last Offering" value={formatCurrency(lastOffering.total)} icon={HandCoins} tone="amber" sub={lastOffering.date} />
+        )}
       </div>
 
       {/* Main situation cards */}
@@ -1134,6 +1147,7 @@ export function MemberProfilePage({
   onRefresh,
 }: PageProps & { memberId: string }) {
   const navigate = useNavigate();
+  const { refresh: refreshAuth } = useAuth();
   const [member, setMember] = useState<Member | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1163,22 +1177,28 @@ export function MemberProfilePage({
 
   const saveMember = async () => {
     if (!edit.id || !edit.name || !edit.email) return;
+    const editingSelf = edit.id === currentUser.id;
     setSaving(true);
     try {
-      await api(`/members/${edit.id}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          name: edit.name,
-          email: edit.email,
-          phone: edit.phone,
-          role: edit.role,
-          cellId: edit.cellId,
-          fellowshipId: edit.fellowshipId,
-          departmentIds: edit.departmentIds,
-          dateOfBirth: edit.dateOfBirth || null,
-        }),
-      });
-      if (canViewWelfareNotes(currentUser.role) && edit.welfareNotes !== undefined) {
+      const body = editingSelf
+        ? {
+            name: edit.name,
+            email: edit.email,
+            phone: edit.phone ?? "",
+            dateOfBirth: edit.dateOfBirth || null,
+          }
+        : {
+            name: edit.name,
+            email: edit.email,
+            phone: edit.phone,
+            role: edit.role,
+            cellId: edit.cellId,
+            fellowshipId: edit.fellowshipId,
+            departmentIds: edit.departmentIds,
+            dateOfBirth: edit.dateOfBirth || null,
+          };
+      await api(`/members/${edit.id}`, { method: "PUT", body: JSON.stringify(body) });
+      if (!editingSelf && canViewWelfareNotes(currentUser.role) && edit.welfareNotes !== undefined) {
         await api(`/members/${edit.id}/welfare`, {
           method: "PATCH",
           body: JSON.stringify({ welfareNotes: edit.welfareNotes }),
@@ -1187,6 +1207,7 @@ export function MemberProfilePage({
       setEditOpen(false);
       load();
       onRefresh();
+      if (editingSelf) await refreshAuth();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Save failed");
     } finally {
@@ -1231,7 +1252,8 @@ export function MemberProfilePage({
   const deptNames = member.departmentIds
     .map((id) => departments.find((d) => d.id === id)?.name)
     .filter(Boolean) as string[];
-  const canEdit = canManageMember(currentUser, member);
+  const canEdit = canEditMemberProfile(currentUser, member);
+  const canManage = canManageMember(currentUser, member);
 
   return (
     <div className="space-y-6">
@@ -1247,7 +1269,7 @@ export function MemberProfilePage({
               setEditOpen(true);
             }}
           >
-            <Edit className="h-4 w-4" /> Edit member
+            <Edit className="h-4 w-4" /> {isOwn ? "Edit profile" : "Edit member"}
           </Btn>
         )}
       </div>
@@ -1336,13 +1358,14 @@ export function MemberProfilePage({
       {isOwn && (
         <Card className="border-dashed">
           <p className="text-sm text-muted-foreground">
-            To change your login password, go to Settings. Contact your cell or fellowship leader to update your role or
-            cell assignment.
+            Use <strong className="text-foreground">Edit profile</strong> to update your name, email, phone, and date of
+            birth. To change your login password, go to Settings. Contact your cell or fellowship leader to update your
+            role or cell assignment.
           </p>
         </Card>
       )}
 
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Edit Member">
+      <Modal open={editOpen} onClose={() => setEditOpen(false)} title={isOwn ? "Edit your profile" : "Edit member"}>
         <div className="space-y-3">
           <Input label="Full Name" value={edit.name || ""} onChange={(v) => setEdit((e) => ({ ...e, name: v }))} />
           <Input label="Email" value={edit.email || ""} onChange={(v) => setEdit((e) => ({ ...e, email: v }))} />
@@ -1353,44 +1376,48 @@ export function MemberProfilePage({
             value={edit.dateOfBirth || ""}
             onChange={(v) => setEdit((e) => ({ ...e, dateOfBirth: v || null }))}
           />
-          <Select
-            label="Role"
-            value={edit.role || "Church Member"}
-            onChange={(v) => setEdit((e) => ({ ...e, role: v as Role }))}
-            options={roleOptions.map((r) => ({ value: r, label: r }))}
-          />
-          {cellScoped ? (
-            <>
-              <Input label="Cell" value={myCell?.name || "Your cell"} disabled onChange={() => {}} />
-              <Input
-                label="Fellowship"
-                value={fellowships.find((f) => f.id === currentUser.fellowshipId)?.name || "—"}
-                disabled
-                onChange={() => {}}
-              />
-            </>
-          ) : (
+          {canManage && (
             <>
               <Select
-                label="Cell"
-                value={edit.cellId || ""}
-                onChange={(v) => setEdit((e) => ({ ...e, cellId: v || null }))}
-                options={[{ value: "", label: "None" }, ...cells.map((c) => ({ value: c.id, label: c.name }))]}
+                label="Role"
+                value={edit.role || "Church Member"}
+                onChange={(v) => setEdit((e) => ({ ...e, role: v as Role }))}
+                options={roleOptions.map((r) => ({ value: r, label: r }))}
               />
-              <Select
-                label="Fellowship"
-                value={edit.fellowshipId || ""}
-                onChange={(v) => setEdit((e) => ({ ...e, fellowshipId: v || null }))}
-                options={[{ value: "", label: "None" }, ...fellowships.map((f) => ({ value: f.id, label: f.name }))]}
-              />
+              {cellScoped ? (
+                <>
+                  <Input label="Cell" value={myCell?.name || "Your cell"} disabled onChange={() => {}} />
+                  <Input
+                    label="Fellowship"
+                    value={fellowships.find((f) => f.id === currentUser.fellowshipId)?.name || "—"}
+                    disabled
+                    onChange={() => {}}
+                  />
+                </>
+              ) : (
+                <>
+                  <Select
+                    label="Cell"
+                    value={edit.cellId || ""}
+                    onChange={(v) => setEdit((e) => ({ ...e, cellId: v || null }))}
+                    options={[{ value: "", label: "None" }, ...cells.map((c) => ({ value: c.id, label: c.name }))]}
+                  />
+                  <Select
+                    label="Fellowship"
+                    value={edit.fellowshipId || ""}
+                    onChange={(v) => setEdit((e) => ({ ...e, fellowshipId: v || null }))}
+                    options={[{ value: "", label: "None" }, ...fellowships.map((f) => ({ value: f.id, label: f.name }))]}
+                  />
+                </>
+              )}
+              {canViewWelfareNotes(currentUser.role) && (
+                <Textarea
+                  label="Welfare / pastoral notes"
+                  value={edit.welfareNotes || ""}
+                  onChange={(v) => setEdit((e) => ({ ...e, welfareNotes: v }))}
+                />
+              )}
             </>
-          )}
-          {canViewWelfareNotes(currentUser.role) && (
-            <Textarea
-              label="Welfare / pastoral notes"
-              value={edit.welfareNotes || ""}
-              onChange={(v) => setEdit((e) => ({ ...e, welfareNotes: v }))}
-            />
           )}
           <ModalFooter>
             <Btn variant="ghost" onClick={() => setEditOpen(false)}>
@@ -1671,11 +1698,26 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
 
 // ─── Departments ───────────────────────────────────────────────────────────────
 
-export function DepartmentsPage({ members, departments: propDepts, onRefresh }: PageProps) {
+export function DepartmentsPage({ members, departments: propDepts, currentUser, onRefresh }: PageProps) {
+  const { refresh: refreshAuth } = useAuth();
   const [departments, setDepartments] = useState(propDepts);
   const [modal, setModal] = useState<"new" | "edit" | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Department | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: "", headId: "", memberIds: [] as string[] });
+  const [form, setForm] = useState({ name: "", headId: "", memberIds: [] as string[], abilities: [] as string[] });
+  const canManage = canManageDepartments(currentUser.role);
+
+  const applyPresetAbilities = () => {
+    setForm((f) => ({ ...f, abilities: getPresetAbilitiesForName(f.name) }));
+  };
+
+  const toggleAbility = (key: DepartmentAbility) => {
+    setForm((f) => ({
+      ...f,
+      abilities: f.abilities.includes(key) ? f.abilities.filter((a) => a !== key) : [...f.abilities, key],
+    }));
+  };
 
   const load = useCallback(() => {
     api<Department[]>("/departments").then(setDepartments).catch(() => setDepartments(propDepts));
@@ -1685,37 +1727,106 @@ export function DepartmentsPage({ members, departments: propDepts, onRefresh }: 
 
   const save = async () => {
     if (!form.name) return;
+    const payload = {
+      name: form.name,
+      headId: form.headId || null,
+      memberIds: form.memberIds,
+      abilities: form.abilities,
+    };
     if (modal === "new") {
-      await api("/departments", { method: "POST", body: JSON.stringify({ name: form.name, headId: form.headId || null, memberIds: form.memberIds }) });
+      await api("/departments", { method: "POST", body: JSON.stringify(payload) });
     } else if (editId) {
-      await api(`/departments/${editId}`, { method: "PUT", body: JSON.stringify({ name: form.name, headId: form.headId || null, memberIds: form.memberIds }) });
+      await api(`/departments/${editId}`, { method: "PUT", body: JSON.stringify(payload) });
     }
     setModal(null);
     setEditId(null);
     load();
     onRefresh();
+    await refreshAuth();
   };
 
   const openEdit = (d: Department) => {
     setEditId(d.id);
-    setForm({ name: d.name, headId: d.headId || "", memberIds: d.memberIds });
+    setForm({
+      name: d.name,
+      headId: d.headId || "",
+      memberIds: d.memberIds,
+      abilities: d.abilities || [],
+    });
     setModal("edit");
+  };
+
+  const confirmDeleteDepartment = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await api(`/departments/${deleteTarget.id}`, { method: "DELETE" });
+      setDeleteTarget(null);
+      load();
+      onRefresh();
+      await refreshAuth();
+      toast.success(`"${deleteTarget.name}" deleted`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to delete department");
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return (
     <div className="space-y-6">
-      <PageHeader {...pageHeaderProps("departments")} title="Ministry Departments" subtitle="Department heads and serving members" action={<Btn onClick={() => { setEditId(null); setForm({ name: "", headId: "", memberIds: [] }); setModal("new"); }}><Plus className="h-4 w-4" /> New Department</Btn>} />
+      <PageHeader
+        {...pageHeaderProps("departments")}
+        title="Ministry Departments"
+        subtitle="Department heads and serving members"
+        action={
+          canManage ? (
+            <Btn
+              onClick={() => {
+                setEditId(null);
+                setForm({ name: "", headId: "", memberIds: [], abilities: [] });
+                setModal("new");
+              }}
+            >
+              <Plus className="h-4 w-4" /> New Department
+            </Btn>
+          ) : undefined
+        }
+      />
       <div className="grid gap-4 md:grid-cols-2">
         {departments.map((d) => (
           <Card key={d.id}>
-            <div className="flex justify-between">
+            <div className="flex justify-between gap-2">
               <h3 className="font-semibold">{d.name}</h3>
-              <button type="button" className="rounded p-1 hover:bg-muted" onClick={() => openEdit(d)}><Edit className="h-4 w-4" /></button>
+              {canManage && (
+                <div className="flex shrink-0 items-center gap-1">
+                  <button type="button" className="rounded p-1 hover:bg-muted" onClick={() => openEdit(d)} aria-label={`Edit ${d.name}`}>
+                    <Edit className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive"
+                    onClick={() => setDeleteTarget(d)}
+                    aria-label={`Delete ${d.name}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
               Head: <MemberNameLink members={members} id={d.headId} className="inline font-normal" />
             </p>
             <p className="mt-2 text-sm">{d.memberIds.length + (d.headId ? 1 : 0)} serving members</p>
+            {d.abilities && d.abilities.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {d.abilities.map((a) => (
+                  <Badge key={a} color="gray" className="text-[10px]">
+                    {ABILITY_LABELS[a as DepartmentAbility] || a}
+                  </Badge>
+                ))}
+              </div>
+            )}
             <ul className="mt-3 space-y-1 text-sm">
               {d.memberIds.slice(0, 6).map((mid) => (
                 <li key={mid}>
@@ -1729,6 +1840,32 @@ export function DepartmentsPage({ members, departments: propDepts, onRefresh }: 
       <Modal open={!!modal} onClose={() => setModal(null)} title={modal === "new" ? "New Department" : "Edit Department"}>
         <div className="space-y-3">
           <Input label="Name" value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} />
+          {canManage && (
+            <Btn
+              variant="secondary"
+              className="w-full sm:w-auto"
+              onClick={() => setForm((f) => ({ ...f, abilities: getPresetAbilitiesForName(f.name) }))}
+            >
+              Apply preset abilities from name
+            </Btn>
+          )}
+          <fieldset className="rounded-xl border border-border p-3">
+            <legend className="px-1 text-sm font-medium">Department abilities (all members)</legend>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              {DEPARTMENT_ABILITIES.map((key) => (
+                <label key={key} className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={form.abilities.includes(key)}
+                    onChange={() => toggleAbility(key)}
+                    disabled={!canManage}
+                  />
+                  <span>{ABILITY_LABELS[key]}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
           <Select label="Head" value={form.headId} onChange={(v) => setForm((f) => ({ ...f, headId: v }))} options={[{ value: "", label: "Unassigned" }, ...members.map((m) => ({ value: m.id, label: m.name }))]} />
           <label className="block text-sm font-medium">Members</label>
           <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border p-2">
@@ -1746,6 +1883,24 @@ export function DepartmentsPage({ members, departments: propDepts, onRefresh }: 
           </div>
           <Btn onClick={save}>Save</Btn>
         </div>
+      </Modal>
+      <Modal open={!!deleteTarget} onClose={() => !deleting && setDeleteTarget(null)} title="Delete department?">
+        <p className="text-sm text-muted-foreground">
+          {deleteTarget ? (
+            <>
+              Remove <span className="font-medium text-foreground">{deleteTarget.name}</span>? Member assignments and
+              linked event/task references will be cleared. This cannot be undone.
+            </>
+          ) : null}
+        </p>
+        <ModalFooter>
+          <Btn variant="secondary" disabled={deleting} onClick={() => setDeleteTarget(null)}>
+            Cancel
+          </Btn>
+          <Btn variant="danger" disabled={deleting} onClick={confirmDeleteDepartment}>
+            {deleting ? "Deleting…" : "Delete department"}
+          </Btn>
+        </ModalFooter>
       </Modal>
     </div>
   );
@@ -1842,6 +1997,7 @@ function AttendanceMemberLog({
 }
 
 export function AttendancePage({ members, cells, fellowships, currentUser, onRefresh }: PageProps) {
+  const { departmentAbilities } = useAuth();
   const cellScoped = isCellScopedRole(currentUser.role);
   const myCell = cells.find((c) => c.id === currentUser.cellId);
   const [pageTab, setPageTab] = useState<"calendar" | "members" | "record">("calendar");
@@ -1954,7 +2110,8 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
 
       {pageTab === "record" && (
         <>
-      {canRecordServiceAttendance(currentUser.role) && (
+      {(canRecordServiceAttendance(currentUser.role) ||
+        canRecordServiceAttendanceForUser(currentUser.role, departmentAbilities)) && (
         <TabBar
           tabs={[
             { id: "cell" as const, label: "Cell Meeting" },
@@ -2067,29 +2224,135 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
 
 // ─── Events ────────────────────────────────────────────────────────────────────
 
-export function EventsPage({ currentUser, onRefresh }: PageProps) {
-  const canCreateEvents = canManageEvents(currentUser.role);
-  const [events, setEvents] = useState<{ id: string; title: string; date: string; time: string; location: string; description: string; rsvpIds: string[] }[]>([]);
+interface EventProgrammeItem {
+  id: string;
+  title: string;
+  description: string;
+  scheduledTime: string | null;
+  sortOrder: number;
+  status: string;
+  assigneeIds: string[];
+}
+
+interface ChurchEvent {
+  id: string;
+  title: string;
+  date: string;
+  time: string;
+  location: string;
+  description: string;
+  rsvpIds: string[];
+  programme: EventProgrammeItem[];
+  programmeStatus: "none" | "draft" | "confirmed";
+  programmeConfirmedAt: string | null;
+  programmeConfirmedBy: string | null;
+}
+
+interface ProgrammeDraft {
+  key: string;
+  title: string;
+  description: string;
+  scheduledTime: string;
+  assigneeIds: string[];
+}
+
+function newProgrammeDraft(): ProgrammeDraft {
+  return { key: crypto.randomUUID(), title: "", description: "", scheduledTime: "", assigneeIds: [] };
+}
+
+export function EventsPage({ members, currentUser, onRefresh }: PageProps) {
+  const { departmentAbilities } = useAuth();
+  const canCreateEvents = canManageEventsForUser(currentUser.role, departmentAbilities);
+  const canConfirmProgramme = canConfirmEventProgramme(currentUser.role);
+  const [events, setEvents] = useState<ChurchEvent[]>([]);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [modal, setModal] = useState(false);
+  const [createStep, setCreateStep] = useState<"details" | "programme">("details");
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ title: "", date: "", time: "", location: "", description: "" });
+  const [programmeDraft, setProgrammeDraft] = useState<ProgrammeDraft[]>([]);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
 
-  const load = () => api<typeof events>("/events").then(setEvents).catch(() => {});
+  const load = () => api<ChurchEvent[]>("/events").then(setEvents).catch(() => {});
 
   useEffect(() => { load(); }, []);
 
-  const create = async () => {
-    await api("/events", { method: "POST", body: JSON.stringify(form) });
-    setModal(false);
+  const resetCreateFlow = () => {
+    setCreateStep("details");
     setForm({ title: "", date: "", time: "", location: "", description: "" });
-    load();
-    onRefresh();
+    setProgrammeDraft([]);
+  };
+
+  const openCreateModal = () => {
+    resetCreateFlow();
+    if (selectedDate) {
+      setForm((f) => ({ ...f, date: selectedDate.toISOString().slice(0, 10) }));
+    }
+    setModal(true);
+  };
+
+  const goToProgrammeStep = () => {
+    if (!form.title.trim() || !form.date) {
+      alert("Title and date are required");
+      return;
+    }
+    setCreateStep("programme");
+  };
+
+  const addProgrammeItem = () => {
+    setProgrammeDraft((items) => [...items, newProgrammeDraft()]);
+  };
+
+  const create = async () => {
+    const items = programmeDraft.filter((p) => p.title.trim());
+    setSaving(true);
+    try {
+      const created = await api<{ id: string }>("/events", { method: "POST", body: JSON.stringify(form) });
+      if (items.length > 0) {
+        await api(`/events/${created.id}/programme`, {
+          method: "PUT",
+          body: JSON.stringify({
+            items: items.map((p, i) => ({
+              title: p.title.trim(),
+              description: p.description.trim(),
+              scheduledTime: p.scheduledTime.trim() || null,
+              assigneeIds: p.assigneeIds,
+              sortOrder: i,
+            })),
+          }),
+        });
+      }
+      setModal(false);
+      resetCreateFlow();
+      load();
+      onRefresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to create event");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const rsvp = async (id: string) => {
     await api(`/events/${id}/rsvp`, { method: "POST" });
     load();
   };
+
+  const confirmProgramme = async (eventId: string) => {
+    setConfirmingId(eventId);
+    try {
+      await api(`/events/${eventId}/programme/confirm`, { method: "POST" });
+      load();
+      onRefresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to confirm programme");
+    } finally {
+      setConfirmingId(null);
+    }
+  };
+
+  const programmeHasAssignees = (e: ChurchEvent) =>
+    e.programme?.some((item) => item.assigneeIds.length > 0) ?? false;
 
   return (
     <div className="space-y-6">
@@ -2099,7 +2362,7 @@ export function EventsPage({ currentUser, onRefresh }: PageProps) {
         subtitle={canCreateEvents ? "Church calendar and RSVPs" : "View church events and RSVP"}
         action={
           canCreateEvents ? (
-            <Btn onClick={() => setModal(true)}>
+            <Btn onClick={openCreateModal}>
               <Plus className="h-4 w-4" /> New Event
             </Btn>
           ) : undefined
@@ -2137,25 +2400,202 @@ export function EventsPage({ currentUser, onRefresh }: PageProps) {
                   <h3 className="font-semibold">{e.title}</h3>
                   <p className="text-sm text-muted-foreground">{e.date} at {e.time} · {e.location}</p>
                   <p className="mt-2 text-sm">{e.description}</p>
+                  {e.programme?.length > 0 && (
+                    <div className="mt-4 rounded-xl border border-border/80 bg-muted/20 p-3">
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          Programme outline
+                        </p>
+                        {e.programmeStatus === "draft" && programmeHasAssignees(e) && (
+                          <Badge color="amber">Awaiting pastor approval</Badge>
+                        )}
+                        {e.programmeStatus === "confirmed" && (
+                          <Badge color="emerald">Confirmed by pastor</Badge>
+                        )}
+                      </div>
+                      {e.programmeStatus === "draft" && programmeHasAssignees(e) && !canConfirmProgramme && (
+                        <p className="mb-2 text-xs text-muted-foreground">
+                          Assignees will be notified after a Pastor confirms this programme.
+                        </p>
+                      )}
+                      <ol className="space-y-2">
+                        {e.programme.map((item, idx) => (
+                          <li key={item.id} className="flex gap-2 text-sm">
+                            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                              {idx + 1}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium">
+                                {item.scheduledTime ? `${item.scheduledTime} · ` : ""}
+                                {item.title}
+                              </p>
+                              {item.description && (
+                                <p className="text-xs text-muted-foreground">{item.description}</p>
+                              )}
+                              {item.assigneeIds.length > 0 && (
+                                <p className="mt-0.5 text-xs text-muted-foreground">
+                                  {item.assigneeIds.map((id) => memberName(members, id)).join(", ")}
+                                </p>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
                 </div>
-                <Btn variant={e.rsvpIds.includes(currentUser.id) ? "secondary" : "accent"} onClick={() => rsvp(e.id)}>
-                  {e.rsvpIds.includes(currentUser.id) ? "Cancel RSVP" : "RSVP"}
-                </Btn>
+                <div className="flex shrink-0 flex-col gap-2">
+                  {canConfirmProgramme &&
+                    e.programmeStatus === "draft" &&
+                    programmeHasAssignees(e) && (
+                      <Btn
+                        variant="highlight"
+                        disabled={confirmingId === e.id}
+                        onClick={() => confirmProgramme(e.id)}
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                        {confirmingId === e.id ? "Confirming…" : "Confirm & notify"}
+                      </Btn>
+                    )}
+                  <Btn variant={e.rsvpIds.includes(currentUser.id) ? "secondary" : "accent"} onClick={() => rsvp(e.id)}>
+                    {e.rsvpIds.includes(currentUser.id) ? "Cancel RSVP" : "RSVP"}
+                  </Btn>
+                </div>
               </div>
             </Card>
           ))}
         </div>
       </div>
       {canCreateEvents && (
-      <Modal open={modal} onClose={() => setModal(false)} title="Create Event">
-        <div className="space-y-3">
-          <Input label="Title" value={form.title} onChange={(v) => setForm((f) => ({ ...f, title: v }))} />
-          <Input label="Date" type="date" value={form.date} onChange={(v) => setForm((f) => ({ ...f, date: v }))} />
-          <Input label="Time" value={form.time} onChange={(v) => setForm((f) => ({ ...f, time: v }))} />
-          <Input label="Location" value={form.location} onChange={(v) => setForm((f) => ({ ...f, location: v }))} />
-          <Textarea label="Description" value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
-          <Btn onClick={create}>Create</Btn>
-        </div>
+      <Modal
+        open={modal}
+        onClose={() => {
+          setModal(false);
+          resetCreateFlow();
+        }}
+        title={createStep === "details" ? "Create Event — Details" : "Create Event — Programme outline"}
+      >
+        <p className="mb-4 text-xs text-muted-foreground">
+          Step {createStep === "details" ? "1" : "2"} of 2
+          {createStep === "programme" && form.title ? ` · ${form.title}` : ""}
+        </p>
+        {createStep === "details" ? (
+          <div className="space-y-3">
+            <Input label="Title" value={form.title} onChange={(v) => setForm((f) => ({ ...f, title: v }))} />
+            <Input label="Date" type="date" value={form.date} onChange={(v) => setForm((f) => ({ ...f, date: v }))} />
+            <Input label="Time" value={form.time} onChange={(v) => setForm((f) => ({ ...f, time: v }))} placeholder="e.g. 10:00 AM" />
+            <Input label="Location" value={form.location} onChange={(v) => setForm((f) => ({ ...f, location: v }))} />
+            <Textarea label="Description" value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
+            <ModalFooter>
+              <Btn variant="ghost" onClick={() => { setModal(false); resetCreateFlow(); }}>
+                Cancel
+              </Btn>
+              <Btn onClick={goToProgrammeStep}>
+                Next: Programme <ChevronRight className="h-4 w-4" />
+              </Btn>
+            </ModalFooter>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Add activities for the event programme. Assignees are notified only after a Pastor confirms the
+              programme on the event page.
+            </p>
+            {programmeDraft.length === 0 ? (
+              <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
+                No programme items yet. Add activities or skip to create the event only.
+              </p>
+            ) : (
+              <div className="max-h-[min(50vh,24rem)] space-y-3 overflow-y-auto pr-1">
+                {programmeDraft.map((item, index) => (
+                  <div key={item.key} className="rounded-xl border border-border bg-muted/20 p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-muted-foreground">Activity {index + 1}</span>
+                      <button
+                        type="button"
+                        className="rounded p-1 text-destructive hover:bg-muted"
+                        onClick={() => setProgrammeDraft((items) => items.filter((p) => p.key !== item.key))}
+                        aria-label="Remove activity"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <Input
+                      label="Activity"
+                      value={item.title}
+                      onChange={(v) =>
+                        setProgrammeDraft((items) =>
+                          items.map((p) => (p.key === item.key ? { ...p, title: v } : p))
+                        )
+                      }
+                      placeholder="e.g. Opening prayer"
+                    />
+                    <Input
+                      label="Time slot"
+                      value={item.scheduledTime}
+                      onChange={(v) =>
+                        setProgrammeDraft((items) =>
+                          items.map((p) => (p.key === item.key ? { ...p, scheduledTime: v } : p))
+                        )
+                      }
+                      placeholder="e.g. 10:30 AM"
+                    />
+                    <Textarea
+                      label="Notes"
+                      value={item.description}
+                      onChange={(v) =>
+                        setProgrammeDraft((items) =>
+                          items.map((p) => (p.key === item.key ? { ...p, description: v } : p))
+                        )
+                      }
+                    />
+                    <div>
+                      <p className="mb-2 text-sm font-medium">Assignees (optional)</p>
+                      <div className="max-h-24 space-y-1 overflow-y-auto rounded-lg border p-2">
+                        {members
+                          .filter((m) => m.active)
+                          .map((m) => (
+                            <label key={m.id} className="flex items-center gap-2 text-sm">
+                              <input
+                                type="checkbox"
+                                checked={item.assigneeIds.includes(m.id)}
+                                onChange={(e) =>
+                                  setProgrammeDraft((items) =>
+                                    items.map((p) =>
+                                      p.key === item.key
+                                        ? {
+                                            ...p,
+                                            assigneeIds: e.target.checked
+                                              ? [...p.assigneeIds, m.id]
+                                              : p.assigneeIds.filter((id) => id !== m.id),
+                                          }
+                                        : p
+                                    )
+                                  )
+                                }
+                              />
+                              {m.name}
+                            </label>
+                          ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <Btn variant="secondary" onClick={addProgrammeItem}>
+              <Plus className="h-4 w-4" /> Add activity
+            </Btn>
+            <ModalFooter>
+              <Btn variant="ghost" onClick={() => setCreateStep("details")}>
+                <ArrowLeft className="h-4 w-4" /> Back
+              </Btn>
+              <Btn onClick={create} disabled={saving}>
+                {saving ? "Creating…" : "Create event"}
+              </Btn>
+            </ModalFooter>
+          </div>
+        )}
       </Modal>
       )}
     </div>
@@ -2184,7 +2624,7 @@ export function ReportsPage({ departments }: PageProps) {
         setDeptData(
           analytics.departmentParticipation
             .filter((d) => Number(d.value) > 0)
-            .map((d) => ({ name: d.name.split(" ")[0], value: Number(d.value) }))
+            .map((d) => ({ name: d.name, value: Number(d.value) }))
         );
         setTrends(analytics.attendanceTrends || []);
       })
@@ -2199,6 +2639,7 @@ export function ReportsPage({ departments }: PageProps) {
     return acc;
   }, {});
   const barData = Object.values(trendByWeek).slice(-4);
+  const deptTotal = deptData.reduce((sum, d) => sum + d.value, 0);
 
   const handleExport = () => {
     exportCSV("church-report.csv", ["Metric", "Value"], [
@@ -2259,16 +2700,59 @@ export function ReportsPage({ departments }: PageProps) {
           {deptData.length === 0 ? (
             <p className="py-12 text-center text-sm text-muted-foreground">No department assignments yet. Add members to departments on the Departments page.</p>
           ) : (
-          <ResponsiveContainer width="100%" height={240}>
-            <PieChart>
-              <Pie data={deptData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label>
-                {deptData.map((_, i) => (
-                  <ChartCell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-center">
+              <div className="mx-auto h-[220px] w-full max-w-[260px] shrink-0 lg:mx-0">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={deptData}
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={48}
+                      outerRadius={88}
+                      paddingAngle={2}
+                      stroke="hsl(var(--card))"
+                      strokeWidth={2}
+                    >
+                      {deptData.map((entry, i) => (
+                        <ChartCell key={entry.name} name={entry.name} fill={pieSegmentColor(i)} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      formatter={(value: number, name: string) => [
+                        `${value} member${value === 1 ? "" : "s"} (${deptTotal ? Math.round((Number(value) / deptTotal) * 100) : 0}%)`,
+                        name,
+                      ]}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <ul className="grid flex-1 gap-2 sm:grid-cols-2">
+                {deptData.map((entry, i) => {
+                  const pct = deptTotal ? Math.round((entry.value / deptTotal) * 100) : 0;
+                  return (
+                    <li
+                      key={entry.name}
+                      className="flex items-center gap-3 rounded-xl border border-border/80 bg-muted/25 px-3 py-2.5"
+                    >
+                      <span
+                        className="h-3.5 w-3.5 shrink-0 rounded-md shadow-sm ring-1 ring-black/5"
+                        style={{ backgroundColor: pieSegmentColor(i) }}
+                        aria-hidden
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium leading-tight text-foreground">{entry.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {entry.value} member{entry.value === 1 ? "" : "s"} · {pct}%
+                        </p>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           )}
         </Card>
       </div>
@@ -2848,6 +3332,7 @@ interface PrayerRequest {
 }
 
 export function PrayerPage({ members, currentUser }: PageProps) {
+  const { departmentAbilities } = useAuth();
   const [prayers, setPrayers] = useState<PrayerRequest[]>([]);
   const [form, setForm] = useState({ title: "", content: "", isPrivate: false });
 
@@ -2867,7 +3352,7 @@ export function PrayerPage({ members, currentUser }: PageProps) {
     load();
   };
 
-  const isMember = ["Cell Member", "Church Member"].includes(currentUser.role);
+  const canRespond = canManagePrayerForUser(currentUser.role, departmentAbilities);
 
   return (
     <div className="space-y-6">
@@ -2895,7 +3380,7 @@ export function PrayerPage({ members, currentUser }: PageProps) {
               <p className="mt-2">{p.content}</p>
               {p.response && <p className="mt-2 text-sm text-accent">Response: {p.response}</p>}
             </div>
-            {!isMember && (
+            {canRespond && (
               <div className="flex gap-2">
                 <Btn variant="accent" onClick={() => updateStatus(p.id, "prayed", "Prayed for in intercession.")}>Mark Prayed</Btn>
                 <Btn onClick={() => updateStatus(p.id, "answered")}>Answered</Btn>
@@ -2915,6 +3400,7 @@ interface FollowUp {
   id: string;
   name: string;
   contact: string;
+  memberId?: string | null;
   stage: "Visitor" | "New Convert" | "Cell Member" | "Worker";
   assignedToId: string | null;
   notes: { date: string; text: string; outcome: string }[];
@@ -2922,22 +3408,56 @@ interface FollowUp {
 }
 
 export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps) {
+  const { departmentAbilities } = useAuth();
+  const canManageFu = canManageDiscipleshipForUser(currentUser.role, departmentAbilities);
   const [followUps, setFollowUps] = useState<FollowUp[]>([]);
   const [addModal, setAddModal] = useState(false);
   const [noteModal, setNoteModal] = useState<string | null>(null);
-  const [newFu, setNewFu] = useState({ name: "", contact: "", stage: "Visitor" as FollowUp["stage"] });
+  const [newFu, setNewFu] = useState({ memberId: "", stage: "Visitor" as FollowUp["stage"] });
+  const [memberSearch, setMemberSearch] = useState("");
+  const [savingFu, setSavingFu] = useState(false);
   const [note, setNote] = useState({ text: "", outcome: "" });
+
+  const trackedMemberIds = new Set(followUps.map((fu) => fu.memberId).filter(Boolean));
+
+  const selectableMembers = members
+    .filter((m) => m.active && !trackedMemberIds.has(m.id))
+    .filter(
+      (m) =>
+        !memberSearch ||
+        m.name.toLowerCase().includes(memberSearch.toLowerCase()) ||
+        m.email.toLowerCase().includes(memberSearch.toLowerCase()) ||
+        (m.phone && m.phone.includes(memberSearch))
+    )
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const selectedMember = members.find((m) => m.id === newFu.memberId);
 
   const load = () => api<FollowUp[]>("/follow-ups").then(setFollowUps).catch(() => {});
 
   useEffect(() => { load(); }, []);
 
   const addFollowUp = async () => {
-    await api("/follow-ups", { method: "POST", body: JSON.stringify({ ...newFu, assignedToId: currentUser.id }) });
-    setAddModal(false);
-    setNewFu({ name: "", contact: "", stage: "Visitor" });
-    load();
-    onRefresh();
+    if (!newFu.memberId) {
+      alert("Please select a member");
+      return;
+    }
+    setSavingFu(true);
+    try {
+      await api("/follow-ups", {
+        method: "POST",
+        body: JSON.stringify({ memberId: newFu.memberId, stage: newFu.stage, assignedToId: currentUser.id }),
+      });
+      setAddModal(false);
+      setNewFu({ memberId: "", stage: "Visitor" });
+      setMemberSearch("");
+      load();
+      onRefresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to create follow-up");
+    } finally {
+      setSavingFu(false);
+    }
   };
 
   const addNote = async () => {
@@ -2958,20 +3478,41 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
 
   return (
     <div className="space-y-6">
-      <PageHeader {...pageHeaderProps("discipleship")} title="Discipleship & Follow-up" subtitle="Track visitors and new converts" action={<Btn onClick={() => setAddModal(true)}><Plus className="h-4 w-4" /> Add</Btn>} />
+      <PageHeader
+        {...pageHeaderProps("discipleship")}
+        title="Discipleship & Follow-up"
+        subtitle="Track visitors and new converts"
+        action={
+          canManageFu ? (
+            <Btn
+              onClick={() => {
+                setMemberSearch("");
+                setNewFu({ memberId: "", stage: "Visitor" });
+                setAddModal(true);
+              }}
+            >
+              <Plus className="h-4 w-4" /> Add
+            </Btn>
+          ) : undefined
+        }
+      />
       {followUps.map((fu) => (
         <Card key={fu.id}>
           <div className="flex flex-wrap justify-between gap-2">
             <div>
-              <h3 className="font-semibold">{fu.name}</h3>
-              <p className="text-sm text-muted-foreground">{fu.contact}</p>
+              <h3 className="font-semibold">
+                {fu.memberId ? <MemberNameLink members={members} id={fu.memberId} /> : fu.name}
+              </h3>
+              <p className="text-sm text-muted-foreground">{fu.contact || "—"}</p>
               <p className="text-xs text-muted-foreground">Assigned: {memberName(members, fu.assignedToId)}</p>
               <Badge color="purple" className="mt-2">{fu.stage}</Badge>
             </div>
-            <div className="flex flex-col gap-2">
-              <Select value={fu.stage} onChange={(v) => updateStage(fu.id, v as FollowUp["stage"])} options={["Visitor", "New Convert", "Cell Member", "Worker"].map((s) => ({ value: s, label: s }))} />
-              <Btn variant="ghost" onClick={() => setNoteModal(fu.id)}>Add Note</Btn>
-            </div>
+            {canManageFu && (
+              <div className="flex flex-col gap-2">
+                <Select value={fu.stage} onChange={(v) => updateStage(fu.id, v as FollowUp["stage"])} options={["Visitor", "New Convert", "Cell Member", "Worker"].map((s) => ({ value: s, label: s }))} />
+                <Btn variant="ghost" onClick={() => setNoteModal(fu.id)}>Add Note</Btn>
+              </div>
+            )}
           </div>
           {fu.notes.map((n, i) => (
             <p key={i} className="mt-2 border-l-2 border-accent pl-3 text-sm">{n.date}: {n.text} — <em>{n.outcome}</em></p>
@@ -2980,10 +3521,43 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
       ))}
       <Modal open={addModal} onClose={() => setAddModal(false)} title="New Follow-up">
         <div className="space-y-3">
-          <Input label="Name" value={newFu.name} onChange={(v) => setNewFu((f) => ({ ...f, name: v }))} />
-          <Input label="Contact" value={newFu.contact} onChange={(v) => setNewFu((f) => ({ ...f, contact: v }))} />
-          <Select label="Stage" value={newFu.stage} onChange={(v) => setNewFu((f) => ({ ...f, stage: v as FollowUp["stage"] }))} options={["Visitor", "New Convert", "Cell Member", "Worker"].map((s) => ({ value: s, label: s }))} />
-          <Btn onClick={addFollowUp}>Create</Btn>
+          <Input
+            label="Search members"
+            value={memberSearch}
+            onChange={setMemberSearch}
+            placeholder="Name, email, or phone"
+          />
+          <Select
+            label="Member"
+            value={newFu.memberId}
+            onChange={(v) => setNewFu((f) => ({ ...f, memberId: v }))}
+            options={[
+              { value: "", label: selectableMembers.length ? "Select a member…" : "No members available" },
+              ...selectableMembers.map((m) => ({
+                value: m.id,
+                label: `${m.name} · ${m.phone || m.email || "no contact"}`,
+              })),
+            ]}
+          />
+          {selectedMember && (
+            <p className="rounded-lg bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+              Contact on file: <span className="font-medium text-foreground">{selectedMember.phone || selectedMember.email || "—"}</span>
+            </p>
+          )}
+          <Select
+            label="Stage"
+            value={newFu.stage}
+            onChange={(v) => setNewFu((f) => ({ ...f, stage: v as FollowUp["stage"] }))}
+            options={["Visitor", "New Convert", "Cell Member", "Worker"].map((s) => ({ value: s, label: s }))}
+          />
+          <ModalFooter>
+            <Btn variant="ghost" onClick={() => setAddModal(false)}>
+              Cancel
+            </Btn>
+            <Btn onClick={addFollowUp} disabled={savingFu || !newFu.memberId}>
+              {savingFu ? "Creating…" : "Create"}
+            </Btn>
+          </ModalFooter>
         </div>
       </Modal>
       <Modal open={!!noteModal} onClose={() => setNoteModal(null)} title="Add Note">
@@ -3012,6 +3586,7 @@ interface Announcement {
 }
 
 export function AnnouncementsPage({ cells, fellowships, departments, currentUser, onRefresh }: PageProps) {
+  const { departmentAbilities } = useAuth();
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({
@@ -3050,7 +3625,7 @@ export function AnnouncementsPage({ cells, fellowships, departments, currentUser
     onRefresh();
   };
 
-  const canPost = !["Cell Member", "Church Member"].includes(currentUser.role);
+  const canPost = canPostAnnouncementsForUser(currentUser.role, departmentAbilities);
 
   return (
     <div className="space-y-6">
@@ -3103,12 +3678,17 @@ interface Task {
   description: string;
   assigneeIds: string[];
   departmentId: string | null;
+  eventId?: string | null;
+  eventTitle?: string | null;
+  eventDate?: string | null;
+  scheduledTime?: string | null;
   dueDate: string;
   priority: "low" | "medium" | "high";
   status: "pending" | "in_progress" | "completed";
 }
 
 export function TasksPage({ members, departments, currentUser }: PageProps) {
+  const { departmentAbilities } = useAuth();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({
@@ -3142,7 +3722,7 @@ export function TasksPage({ members, departments, currentUser }: PageProps) {
     load();
   };
 
-  const canCreate = ["Senior Pastor", "Associate Pastor", "Admin"].includes(currentUser.role);
+  const canCreate = canManageTasksForUser(currentUser.role, departmentAbilities);
 
   return (
     <div className="space-y-6">
@@ -3152,7 +3732,16 @@ export function TasksPage({ members, departments, currentUser }: PageProps) {
           <div className="flex flex-wrap justify-between gap-2">
             <div>
               <h3 className="font-semibold">{t.title}</h3>
-              <p className="text-sm text-muted-foreground">Due: {t.dueDate}</p>
+              <p className="text-sm text-muted-foreground">
+                Due: {t.dueDate}
+                {t.eventTitle && (
+                  <>
+                    {" "}
+                    · Event: <span className="font-medium text-foreground">{t.eventTitle}</span>
+                    {t.scheduledTime ? ` (${t.scheduledTime})` : ""}
+                  </>
+                )}
+              </p>
               <p className="mt-1 text-sm">{t.description}</p>
               <p className="mt-1 text-xs text-muted-foreground">
                 Assignees: {t.assigneeIds.map((id) => memberName(members, id)).join(", ") || "—"}
@@ -3369,17 +3958,21 @@ interface CellReport {
 }
 
 export function ReportSubmissionsPage({ members, cells, departments, currentUser, onRefresh }: PageProps) {
+  const { departmentAbilities } = useAuth();
   const [reports, setReports] = useState<CellReport[]>([]);
   const [form, setForm] = useState({ attendanceCount: "", newVisitors: "", description: "", dueDate: "" });
   const [approveComment, setApproveComment] = useState<Record<string, string>>({});
-  const isDeptHead = departments.some((d) => d.headId === currentUser.id);
+  const canDeptReport = canSubmitDepartmentReport(departmentAbilities);
+  const myDepartmentIds = departments
+    .filter((d) => d.memberIds.includes(currentUser.id) || d.headId === currentUser.id)
+    .map((d) => d.id);
 
   const load = () => api<CellReport[]>("/reports/submissions").then(setReports).catch(() => {});
 
   useEffect(() => { load(); }, []);
 
   const reportType =
-    isDeptHead && !["Cell Leader", "Sub-cell Leader", "Fellowship Leader"].includes(currentUser.role)
+    canDeptReport && !["Cell Leader", "Sub-cell Leader", "Fellowship Leader"].includes(currentUser.role)
       ? "department"
       : currentUser.role === "Fellowship Leader"
         ? "fellowship"
@@ -3392,7 +3985,7 @@ export function ReportSubmissionsPage({ members, cells, departments, currentUser
         type: reportType,
         cellId: reportType === "cell" ? currentUser.cellId : null,
         fellowshipId: reportType === "fellowship" ? currentUser.fellowshipId : null,
-        departmentId: reportType === "department" ? departments.find((d) => d.headId === currentUser.id)?.id : null,
+        departmentId: reportType === "department" ? myDepartmentIds[0] || null : null,
         period: `Week of ${new Date().toISOString().slice(0, 10)}`,
         attendanceCount: Number(form.attendanceCount) || 0,
         newVisitors: Number(form.newVisitors) || 0,
@@ -3417,7 +4010,7 @@ export function ReportSubmissionsPage({ members, cells, departments, currentUser
     currentUser.role === "Cell Leader" ||
     currentUser.role === "Sub-cell Leader" ||
     currentUser.role === "Fellowship Leader" ||
-    isDeptHead;
+    canDeptReport;
 
   return (
     <div className="space-y-6">

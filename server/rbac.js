@@ -1,3 +1,11 @@
+import {
+  resolveEffectivePages,
+  canAccessPageWithAbilities,
+  memberHasAbility,
+  userHasAbility,
+  getMemberDepartmentAbilities,
+} from "./department-abilities.js";
+
 export const PAGE_ACCESS = {
   "Senior Pastor": [
     "dashboard", "members", "cells", "departments", "attendance", "events", "reports",
@@ -41,8 +49,10 @@ export function resolveUserPages(role, accessLevel = "standard") {
   return [...new Set(pages)];
 }
 
-export function canAccessPage(role, page, accessLevel = "standard") {
-  return resolveUserPages(role, accessLevel).includes(page);
+export { resolveEffectivePages, canAccessPageWithAbilities, memberHasAbility, userHasAbility };
+
+export function canAccessPage(role, page, accessLevel = "standard", departmentAbilities = []) {
+  return canAccessPageWithAbilities(role, page, accessLevel, departmentAbilities);
 }
 
 export function canAccessFinances(role) {
@@ -57,24 +67,10 @@ export function canApproveMedia(role) {
   return role === "Senior Pastor" || role === "Associate Pastor";
 }
 
-export async function isMediaTeamMember(db, memberId) {
-  const inDept = await db
-    .prepare(
-      `SELECT 1 FROM member_departments md
-       JOIN departments d ON d.id = md.department_id
-       WHERE md.member_id = ? AND d.name LIKE '%Media%'`
-    )
-    .get(memberId);
-  if (inDept) return true;
-  const head = await db
-    .prepare("SELECT 1 FROM departments WHERE head_id = ? AND name LIKE '%Media%'")
-    .get(memberId);
-  return !!head;
-}
-
-export async function canUploadMedia(db, member) {
+export async function canUploadMedia(db, member, departmentAbilities = null) {
   if (["Senior Pastor", "Associate Pastor", "Admin"].includes(member.role)) return true;
-  return isMediaTeamMember(db, member.id);
+  const abilities = departmentAbilities ?? (await getMemberDepartmentAbilities(db, member.id));
+  return memberHasAbility(abilities, "upload_media");
 }
 
 export function canViewAllMedia(role) {
@@ -83,6 +79,42 @@ export function canViewAllMedia(role) {
 
 export function canManageEvents(role) {
   return ["Senior Pastor", "Associate Pastor", "Admin", "Fellowship Leader"].includes(role);
+}
+
+export function canManageEventsForUser(role, departmentAbilities = []) {
+  return canManageEvents(role) || memberHasAbility(departmentAbilities, "manage_events");
+}
+
+export function canManageTasksForUser(role, departmentAbilities = []) {
+  return ["Senior Pastor", "Associate Pastor", "Admin"].includes(role) || memberHasAbility(departmentAbilities, "manage_tasks");
+}
+
+export function canPostAnnouncementsForUser(role, departmentAbilities = []) {
+  return ["Senior Pastor", "Associate Pastor", "Admin", "Fellowship Leader", "Cell Leader", "Sub-cell Leader"].includes(role)
+    || memberHasAbility(departmentAbilities, "post_announcements");
+}
+
+export function canManagePrayerForUser(role, departmentAbilities = []) {
+  return ["Senior Pastor", "Associate Pastor", "Admin", "Fellowship Leader", "Cell Leader"].includes(role)
+    || memberHasAbility(departmentAbilities, "manage_prayer");
+}
+
+export function canManageDiscipleshipForUser(role, departmentAbilities = []) {
+  return ["Senior Pastor", "Associate Pastor", "Admin", "Fellowship Leader"].includes(role)
+    || memberHasAbility(departmentAbilities, "manage_discipleship");
+}
+
+export function canRecordServiceAttendanceForUser(actor, departmentAbilities = []) {
+  if (canRecordAttendance(actor, { type: "service", cellId: null })) return true;
+  return memberHasAbility(departmentAbilities, "record_service_attendance") && !isCellScopedRole(actor.role);
+}
+
+export function canManageDepartments(role) {
+  return role === "Senior Pastor" || role === "Associate Pastor" || role === "Admin";
+}
+
+export function canConfirmEventProgramme(role) {
+  return role === "Senior Pastor" || role === "Associate Pastor";
 }
 
 export async function isDepartmentHead(db, memberId) {
@@ -235,9 +267,31 @@ export function validateMemberCreate(actor, { role, cellId, fellowshipId }) {
   return { ok: true, cellId, fellowshipId };
 }
 
+export function isPrivilegedSelfUpdate(updates) {
+  return (
+    updates.role !== undefined ||
+    updates.cellId !== undefined ||
+    updates.fellowshipId !== undefined ||
+    updates.active !== undefined ||
+    updates.departmentIds !== undefined
+  );
+}
+
 export async function validateMemberUpdate(db, actor, memberId, updates) {
   const target = await db.prepare("SELECT * FROM members WHERE id = ?").get(memberId);
   if (!target) return { ok: false, error: "Member not found", status: 404 };
+
+  if (actor.id === memberId) {
+    if (isPrivilegedSelfUpdate(updates)) {
+      return {
+        ok: false,
+        error: "You can only update your name, email, phone, and date of birth",
+        status: 403,
+      };
+    }
+    return { ok: true, target, selfOnly: true };
+  }
+
   if (!canManageMember(actor, target)) {
     return { ok: false, error: "You cannot edit this member", status: 403 };
   }

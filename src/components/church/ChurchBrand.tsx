@@ -17,6 +17,7 @@ export function ChurchBrand({
   size = "md",
   theme = "sidebar",
   layout = "row",
+  showDefaultTagline = true,
   className,
 }: {
   name: string;
@@ -25,6 +26,7 @@ export function ChurchBrand({
   size?: "sm" | "md" | "lg";
   theme?: "sidebar" | "header";
   layout?: "row" | "stacked";
+  showDefaultTagline?: boolean;
   className?: string;
 }) {
   const [logoFailed, setLogoFailed] = useState(false);
@@ -100,7 +102,7 @@ export function ChurchBrand({
     >
       {tagline}
     </p>
-  ) : !isHeader ? (
+  ) : !isHeader && showDefaultTagline ? (
     <p className={cn("text-xs text-muted-foreground", layout === "stacked" && "text-center")}>Church Management</p>
   ) : null;
 

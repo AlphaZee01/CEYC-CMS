@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import { getPresetAbilitiesForName, serializeDepartmentAbilities } from "./department-abilities.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "..", "data");
@@ -81,7 +82,8 @@ export function initSchema() {
     CREATE TABLE IF NOT EXISTS departments (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,
-      head_id TEXT REFERENCES members(id) ON DELETE SET NULL
+      head_id TEXT REFERENCES members(id) ON DELETE SET NULL,
+      abilities TEXT DEFAULT '[]'
     );
 
     CREATE TABLE IF NOT EXISTS member_departments (
@@ -373,6 +375,42 @@ function migrateColumns(db) {
   }
   if (!mediaCols.includes("approved_at")) {
     db.exec("ALTER TABLE media_items ADD COLUMN approved_at TEXT");
+  }
+  const fuCols = db.prepare("PRAGMA table_info(follow_ups)").all().map((c) => c.name);
+  if (!fuCols.includes("member_id")) {
+    db.exec("ALTER TABLE follow_ups ADD COLUMN member_id TEXT REFERENCES members(id) ON DELETE SET NULL");
+  }
+  const taskCols = db.prepare("PRAGMA table_info(tasks)").all().map((c) => c.name);
+  if (!taskCols.includes("event_id")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN event_id TEXT REFERENCES events(id) ON DELETE CASCADE");
+  }
+  if (!taskCols.includes("sort_order")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN sort_order INTEGER DEFAULT 0");
+  }
+  if (!taskCols.includes("scheduled_time")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN scheduled_time TEXT");
+  }
+  const eventCols = db.prepare("PRAGMA table_info(events)").all().map((c) => c.name);
+  if (!eventCols.includes("programme_status")) {
+    db.exec("ALTER TABLE events ADD COLUMN programme_status TEXT DEFAULT 'none'");
+  }
+  if (!eventCols.includes("programme_confirmed_at")) {
+    db.exec("ALTER TABLE events ADD COLUMN programme_confirmed_at TEXT");
+  }
+  if (!eventCols.includes("programme_confirmed_by")) {
+    db.exec("ALTER TABLE events ADD COLUMN programme_confirmed_by TEXT REFERENCES members(id) ON DELETE SET NULL");
+  }
+  const deptCols = db.prepare("PRAGMA table_info(departments)").all().map((c) => c.name);
+  if (!deptCols.includes("abilities")) {
+    db.exec("ALTER TABLE departments ADD COLUMN abilities TEXT DEFAULT '[]'");
+    const depts = db.prepare("SELECT id, name, abilities FROM departments").all();
+    const upd = db.prepare("UPDATE departments SET abilities = ? WHERE id = ?");
+    for (const d of depts) {
+      const current = d.abilities && d.abilities !== "[]" ? d.abilities : null;
+      if (current) continue;
+      const preset = serializeDepartmentAbilities(getPresetAbilitiesForName(d.name));
+      upd.run(preset, d.id);
+    }
   }
 }
 

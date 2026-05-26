@@ -114,6 +114,26 @@ export const ICON_TONES: Record<
 
 export const CHART_COLORS = ICON_TONE_LIST.map((tone) => ICON_TONES[tone].chart);
 
+/** Saturated, well-separated hues for pie charts and category legends (max contrast between neighbors). */
+export const PIE_SEGMENT_COLORS = [
+  "#4F46E5",
+  "#EA580C",
+  "#059669",
+  "#DB2777",
+  "#CA8A04",
+  "#7C3AED",
+  "#0284C7",
+  "#DC2626",
+  "#0D9488",
+  "#9333EA",
+  "#2563EB",
+  "#C2410C",
+] as const;
+
+export function pieSegmentColor(index: number): string {
+  return PIE_SEGMENT_COLORS[index % PIE_SEGMENT_COLORS.length];
+}
+
 export const PAGE_ICON_TONES: Record<PageId, IconTone> = {
   dashboard: "blue",
   members: "indigo",

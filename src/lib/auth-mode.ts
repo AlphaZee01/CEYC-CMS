@@ -12,13 +12,21 @@ export async function loadAuthMode(): Promise<AuthMode> {
   if (loadPromise) return loadPromise;
 
   loadPromise = (async () => {
-    try {
-      const config = await publicApi<{ authMode: AuthMode }>("/public/config");
-      authMode = config.authMode === "supabase" ? "supabase" : "jwt";
-    } catch {
-      authMode =
-        import.meta.env.VITE_USE_SUPABASE_AUTH === "true" ? "supabase" : "jwt";
+    const retries = [0, 400, 1200];
+    let lastError: unknown;
+    for (const delayMs of retries) {
+      if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+      try {
+        const config = await publicApi<{ authMode: AuthMode }>("/public/config");
+        authMode = config.authMode === "supabase" ? "supabase" : "jwt";
+        loaded = true;
+        return authMode;
+      } catch (err) {
+        lastError = err;
+      }
     }
+    console.warn("[auth] Could not load /api/public/config; using JWT login.", lastError);
+    authMode = "jwt";
     loaded = true;
     return authMode;
   })();

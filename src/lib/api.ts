@@ -84,6 +84,7 @@ export const authApi = {
     api<{
       user: unknown;
       pages: string[];
+      departmentAbilities?: string[];
       branding?: { name: string; tagline?: string; logoUrl?: string | null };
     }>("/auth/me"),
 };

@@ -1,4 +1,9 @@
 import type { Member, Role } from "@/types/church";
+import { memberHasAbility, type DepartmentAbility } from "@/lib/department-abilities";
+
+export function hasDepartmentAbility(abilities: string[] | undefined, key: DepartmentAbility | string) {
+  return memberHasAbility(abilities, key);
+}
 
 export const ROLE_RANK: Record<Role, number> = {
   "Church Member": 0,
@@ -32,6 +37,11 @@ export function canCreateMembers(role: Role) {
   return !["Cell Member", "Church Member"].includes(role);
 }
 
+export function canEditMemberProfile(actor: Member, target: Member) {
+  if (actor.id === target.id) return true;
+  return canManageMember(actor, target);
+}
+
 export function canManageMember(actor: Member, target: Member) {
   if (actor.id === target.id) return false;
 
@@ -57,6 +67,51 @@ export function canRecordServiceAttendance(role: Role) {
 
 export function canManageEvents(role: Role) {
   return ["Senior Pastor", "Associate Pastor", "Admin", "Fellowship Leader"].includes(role);
+}
+
+export function canManageEventsForUser(role: Role, departmentAbilities?: string[]) {
+  return canManageEvents(role) || hasDepartmentAbility(departmentAbilities, "manage_events");
+}
+
+export function canManageTasksForUser(role: Role, departmentAbilities?: string[]) {
+  return ["Senior Pastor", "Associate Pastor", "Admin"].includes(role) || hasDepartmentAbility(departmentAbilities, "manage_tasks");
+}
+
+export function canPostAnnouncementsForUser(role: Role, departmentAbilities?: string[]) {
+  return (
+    ["Senior Pastor", "Associate Pastor", "Admin", "Fellowship Leader", "Cell Leader", "Sub-cell Leader"].includes(role) ||
+    hasDepartmentAbility(departmentAbilities, "post_announcements")
+  );
+}
+
+export function canSubmitDepartmentReport(departmentAbilities?: string[]) {
+  return hasDepartmentAbility(departmentAbilities, "submit_department_report");
+}
+
+export function canManagePrayerForUser(role: Role, departmentAbilities?: string[]) {
+  return (
+    ["Senior Pastor", "Associate Pastor", "Admin", "Fellowship Leader", "Cell Leader"].includes(role) ||
+    hasDepartmentAbility(departmentAbilities, "manage_prayer")
+  );
+}
+
+export function canManageDiscipleshipForUser(role: Role, departmentAbilities?: string[]) {
+  return (
+    ["Senior Pastor", "Associate Pastor", "Admin", "Fellowship Leader"].includes(role) ||
+    hasDepartmentAbility(departmentAbilities, "manage_discipleship")
+  );
+}
+
+export function canRecordServiceAttendanceForUser(role: Role, departmentAbilities?: string[]) {
+  return canRecordServiceAttendance(role) || hasDepartmentAbility(departmentAbilities, "record_service_attendance");
+}
+
+export function canManageDepartments(role: Role) {
+  return role === "Senior Pastor" || role === "Associate Pastor" || role === "Admin";
+}
+
+export function canConfirmEventProgramme(role: Role) {
+  return role === "Senior Pastor" || role === "Associate Pastor";
 }
 
 export function canApproveMedia(role: Role) {

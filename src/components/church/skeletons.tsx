@@ -43,7 +43,7 @@ export function DashboardSectionSkeleton({ lines = 4 }: { lines?: number }) {
 export function DashboardSkeleton({ pastoral = false }: { pastoral?: boolean }) {
   return (
     <div className="space-y-6">
-      <StatCardsSkeleton count={pastoral ? 6 : 4} />
+      <StatCardsSkeleton count={pastoral ? 8 : 4} />
       <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
         <div className="space-y-4 lg:col-span-1">
           <DashboardSectionSkeleton lines={3} />
@@ -182,15 +182,15 @@ export function AppShellSkeleton() {
         </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="border-b bg-gradient-to-r from-[hsl(var(--sidebar-accent))] to-[hsl(var(--sidebar-primary))] px-4 py-3 pt-safe sm:px-5">
+        <header className="border-b border-border bg-card/80 px-4 py-3 pt-safe backdrop-blur-md sm:px-6">
           <div className="flex items-center gap-3">
-            <Skeleton className="h-11 w-11 rounded-2xl bg-white/15" />
-            <div className="flex-1 space-y-2">
-              <Skeleton className="h-5 w-32 bg-white/15" />
-              <Skeleton className="h-3 w-24 bg-white/10" />
+            <Skeleton className="h-9 w-9 shrink-0 rounded-xl" />
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <Skeleton className="h-4 w-36" />
+              <Skeleton className="hidden h-3 w-28 sm:block" />
             </div>
-            <Skeleton className="h-10 w-10 rounded-xl bg-white/10" />
-            <Skeleton className="h-10 w-10 rounded-full bg-white/10" />
+            <Skeleton className="h-10 w-10 rounded-xl" />
+            <Skeleton className="h-10 w-10 rounded-xl" />
           </div>
         </header>
         <main className="flex-1 p-4 sm:p-6 lg:p-8">

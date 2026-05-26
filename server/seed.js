@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { getDb } from "./store.js";
+import { getPresetAbilitiesForName, serializeDepartmentAbilities } from "./department-abilities.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(__dirname, "..", "data", "church.db");
@@ -91,9 +92,10 @@ export async function seedDatabase(reset = false) {
   );
   for (const c of cells) await insC.run(c.id, c.name, c.fellowshipId, null, null);
 
-  const insD = db.prepare("INSERT INTO departments (id, name, head_id) VALUES (?, ?, ?)");
+  const insD = db.prepare("INSERT INTO departments (id, name, head_id, abilities) VALUES (?, ?, ?, ?)");
   for (let i = 0; i < DEPARTMENTS.length; i++) {
-    await insD.run(`d${i + 1}`, DEPARTMENTS[i], null);
+    const name = DEPARTMENTS[i];
+    await insD.run(`d${i + 1}`, name, null, serializeDepartmentAbilities(getPresetAbilitiesForName(name)));
   }
 
   const coreMembers = [

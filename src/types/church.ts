@@ -60,6 +60,7 @@ export interface Department {
   name: string;
   headId: string | null;
   memberIds: string[];
+  abilities?: string[];
 }
 
 export interface AuthUser {

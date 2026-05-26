@@ -7,8 +7,13 @@ import multer from "multer";
 import { fileURLToPath } from "url";
 import { getDb, initDatabase } from "./store.js";
 import { memberToJson, logActivity, notifyMember } from "./db.js";
-import { authMiddleware, loginUser, requirePage } from "./auth.js";
-import { resolveUserPages, isDepartmentHead } from "./rbac.js";
+import { authMiddleware, loginUser, requirePage, requireMembersPageOrSelf } from "./auth.js";
+import {
+  parseDepartmentAbilities,
+  serializeDepartmentAbilities,
+  getPresetAbilitiesForName,
+} from "./department-abilities.js";
+import { resolvePagesForUser } from "./auth.js";
 import { registerCompletionRoutes } from "./routes-complete.js";
 import { startJobs } from "./jobs.js";
 import { logAudit } from "./audit.js";
@@ -22,7 +27,15 @@ import {
   canApproveMedia,
   canViewAllMedia,
   canEditCellAttendance,
-  canManageEvents,
+  canManageEventsForUser,
+  canManageDepartments,
+  canConfirmEventProgramme,
+  canManageTasksForUser,
+  canPostAnnouncementsForUser,
+  canManagePrayerForUser,
+  canManageDiscipleshipForUser,
+  canRecordServiceAttendanceForUser,
+  userHasAbility,
   scopeMemberFilter,
   validateMemberCreate,
   validateMemberUpdate,
@@ -125,12 +138,22 @@ async function loadMember(db, id) {
 // ─── Public (no auth) ────────────────────────────────────────────────────────
 
 app.get("/api/public/branding", async (req, res) => {
-  const s = await getDb().prepare("SELECT name, tagline, logo_url FROM church_settings WHERE id = 1").get();
-  res.json(brandingFromSettings(s, req));
+  try {
+    const s = await getDb().prepare("SELECT name, tagline, logo_url FROM church_settings WHERE id = 1").get();
+    res.json(brandingFromSettings(s, req));
+  } catch (err) {
+    console.error("public/branding error:", err);
+    res.status(500).json({ error: "Failed to load branding" });
+  }
 });
 
 app.get("/api/public/config", (_req, res) => {
-  res.json({ authMode: useSupabaseAuth() ? "supabase" : "jwt" });
+  try {
+    res.json({ authMode: useSupabaseAuth() ? "supabase" : "jwt" });
+  } catch (err) {
+    console.error("public/config error:", err);
+    res.status(500).json({ error: "Failed to load config" });
+  }
 });
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
@@ -162,7 +185,8 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
       accessLevel: req.user.accessLevel,
       member: req.user.member,
     },
-    pages: resolveUserPages(req.user.member.role, req.user.accessLevel),
+    pages: resolvePagesForUser(req.user),
+    departmentAbilities: req.user.departmentAbilities || [],
     branding: brandingFromSettings(settings, req),
   });
 });
@@ -207,7 +231,7 @@ app.get("/api/bootstrap", authMiddleware, async (req, res) => {
       const memberIds = (await db
         .prepare("SELECT member_id FROM member_departments WHERE department_id = ?")
         .all(d.id)).map((r) => r.member_id);
-      return { id: d.id, name: d.name, headId: d.head_id, memberIds };
+      return departmentToJson(d, memberIds);
     })
   );
 
@@ -229,9 +253,20 @@ app.get("/api/bootstrap", authMiddleware, async (req, res) => {
           logoUrl: branding.logoUrl,
         }
       : {},
-    pages: resolveUserPages(req.user.member.role, req.user.accessLevel),
+    pages: resolvePagesForUser(req.user),
+    departmentAbilities: req.user.departmentAbilities || [],
   });
 });
+
+function departmentToJson(d, memberIds) {
+  return {
+    id: d.id,
+    name: d.name,
+    headId: d.head_id,
+    memberIds,
+    abilities: parseDepartmentAbilities(d.abilities),
+  };
+}
 
 // ─── Members ───────────────────────────────────────────────────────────────────
 
@@ -355,7 +390,7 @@ app.post("/api/members", authMiddleware, requirePage("members"), async (req, res
   res.status(201).json(await loadMember(db, id));
 });
 
-app.put("/api/members/:id", authMiddleware, requirePage("members"), async (req, res) => {
+app.put("/api/members/:id", authMiddleware, requireMembersPageOrSelf, async (req, res) => {
   const db = getDb();
   const { name, email, phone, role, cellId, fellowshipId, departmentIds, active, dateOfBirth } = req.body;
 
@@ -370,59 +405,95 @@ app.put("/api/members/:id", authMiddleware, requirePage("members"), async (req, 
     cellId,
     fellowshipId,
     active,
+    departmentIds,
   });
   if (!validation.ok) return res.status(validation.status || 403).json({ error: validation.error });
 
-  const fel =
-    fellowshipId ??
-    (cellId !== undefined
-      ? cellId
-        ? (await db.prepare("SELECT fellowship_id FROM cells WHERE id = ?").get(cellId))?.fellowship_id
-        : null
-      : undefined);
   const sets = [];
   const params = [];
-  if (name) {
-    sets.push("name = ?");
-    params.push(name);
+
+  if (validation.selfOnly) {
+    if (!name && !email) {
+      return res.status(400).json({ error: "Name and email are required" });
+    }
+    if (name) {
+      sets.push("name = ?");
+      params.push(name);
+    }
+    if (email) {
+      sets.push("email = ?");
+      params.push(email.toLowerCase());
+    }
+    if (phone !== undefined) {
+      sets.push("phone = ?");
+      params.push(phone);
+    }
+    if (dateOfBirth !== undefined) {
+      sets.push("date_of_birth = ?");
+      params.push(dateOfBirth || null);
+    }
+  } else {
+    const fel =
+      fellowshipId ??
+      (cellId !== undefined
+        ? cellId
+          ? (await db.prepare("SELECT fellowship_id FROM cells WHERE id = ?").get(cellId))?.fellowship_id
+          : null
+        : undefined);
+    if (name) {
+      sets.push("name = ?");
+      params.push(name);
+    }
+    if (email) {
+      sets.push("email = ?");
+      params.push(email);
+    }
+    if (phone !== undefined) {
+      sets.push("phone = ?");
+      params.push(phone);
+    }
+    if (role) {
+      sets.push("role = ?");
+      params.push(role);
+    }
+    if (cellId !== undefined) {
+      sets.push("cell_id = ?");
+      params.push(cellId);
+    }
+    if (fel !== undefined) {
+      sets.push("fellowship_id = ?");
+      params.push(fel);
+    }
+    if (active !== undefined) {
+      sets.push("active = ?");
+      params.push(active ? 1 : 0);
+    }
+    if (dateOfBirth !== undefined) {
+      sets.push("date_of_birth = ?");
+      params.push(dateOfBirth || null);
+    }
+    if (departmentIds) {
+      await db.prepare("DELETE FROM member_departments WHERE member_id = ?").run(req.params.id);
+      for (const d of departmentIds) {
+        await db.prepare("INSERT INTO member_departments (member_id, department_id) VALUES (?, ?)").run(
+          req.params.id,
+          d
+        );
+      }
+    }
   }
-  if (email) {
-    sets.push("email = ?");
-    params.push(email);
-  }
-  if (phone !== undefined) {
-    sets.push("phone = ?");
-    params.push(phone);
-  }
-  if (role) {
-    sets.push("role = ?");
-    params.push(role);
-  }
-  if (cellId !== undefined) {
-    sets.push("cell_id = ?");
-    params.push(cellId);
-  }
-  if (fel !== undefined) {
-    sets.push("fellowship_id = ?");
-    params.push(fel);
-  }
-  if (active !== undefined) {
-    sets.push("active = ?");
-    params.push(active ? 1 : 0);
-  }
-  if (dateOfBirth !== undefined) {
-    sets.push("date_of_birth = ?");
-    params.push(dateOfBirth || null);
-  }
+
+  if (sets.length === 0) return res.status(400).json({ error: "No fields to update" });
+
   sets.push("updated_at = datetime('now')");
   params.push(req.params.id);
   await db.prepare(`UPDATE members SET ${sets.join(", ")} WHERE id = ?`).run(...params);
-  if (departmentIds) {
-    await db.prepare("DELETE FROM member_departments WHERE member_id = ?").run(req.params.id);
-    for (const d of departmentIds) {
-      await db.prepare("INSERT INTO member_departments (member_id, department_id) VALUES (?, ?)").run(req.params.id, d);
-    }
+
+  const loginEmail = validation.selfOnly && email ? email.toLowerCase() : email;
+  if (loginEmail) {
+    await db.prepare("UPDATE users SET email = ? WHERE member_id = ?").run(loginEmail, req.params.id);
   }
+
   await logActivity(db, `Member profile updated: ${req.params.id}`, req.user.member.id);
   res.json(await loadMember(db, req.params.id));
 });
@@ -565,28 +636,44 @@ app.get("/api/departments", authMiddleware, requirePage("departments"), async (r
         const memberIds = (await db
           .prepare("SELECT member_id FROM member_departments WHERE department_id = ?")
           .all(d.id)).map((r) => r.member_id);
-        return { id: d.id, name: d.name, headId: d.head_id, memberIds };
+        return departmentToJson(d, memberIds);
       })
     )
   );
 });
 
 app.post("/api/departments", authMiddleware, requirePage("departments"), async (req, res) => {
+  if (!canManageDepartments(req.user.member.role)) {
+    return res.status(403).json({ error: "You cannot manage departments" });
+  }
   const db = getDb();
-  const { name, headId, memberIds = [] } = req.body;
+  const { name, headId, memberIds = [], abilities } = req.body;
   const id = uid();
-  await db.prepare("INSERT INTO departments (id, name, head_id) VALUES (?, ?, ?)").run(id, name, headId || null);
+  const storedAbilities = serializeDepartmentAbilities(
+    Array.isArray(abilities) && abilities.length ? abilities : getPresetAbilitiesForName(name)
+  );
+  await db
+    .prepare("INSERT INTO departments (id, name, head_id, abilities) VALUES (?, ?, ?, ?)")
+    .run(id, name, headId || null, storedAbilities);
   for (const mid of memberIds) {
     await db.prepare("INSERT OR IGNORE INTO member_departments (member_id, department_id) VALUES (?, ?)").run(mid, id);
   }
-  res.status(201).json({ id, name, headId, memberIds });
+  res.status(201).json({ id, name, headId, memberIds, abilities: parseDepartmentAbilities(storedAbilities) });
 });
 
 app.put("/api/departments/:id", authMiddleware, requirePage("departments"), async (req, res) => {
+  if (!canManageDepartments(req.user.member.role)) {
+    return res.status(403).json({ error: "You cannot manage departments" });
+  }
   const db = getDb();
-  const { name, headId, memberIds } = req.body;
+  const { name, headId, memberIds, abilities } = req.body;
   if (name) await db.prepare("UPDATE departments SET name = ? WHERE id = ?").run(name, req.params.id);
   if (headId !== undefined) await db.prepare("UPDATE departments SET head_id = ? WHERE id = ?").run(headId || null, req.params.id);
+  if (abilities !== undefined) {
+    await db
+      .prepare("UPDATE departments SET abilities = ? WHERE id = ?")
+      .run(serializeDepartmentAbilities(abilities), req.params.id);
+  }
   if (memberIds) {
     await db.prepare("DELETE FROM member_departments WHERE department_id = ?").run(req.params.id);
     for (const mid of memberIds) {
@@ -595,12 +682,21 @@ app.put("/api/departments/:id", authMiddleware, requirePage("departments"), asyn
   }
   const d = await db.prepare("SELECT * FROM departments WHERE id = ?").get(req.params.id);
   const mids = await db.prepare("SELECT member_id FROM member_departments WHERE department_id = ?").all(d.id);
-  res.json({
-    id: d.id,
-    name: d.name,
-    headId: d.head_id,
-    memberIds: mids.map((r) => r.member_id),
-  });
+  res.json(departmentToJson(d, mids.map((r) => r.member_id)));
+});
+
+app.delete("/api/departments/:id", authMiddleware, requirePage("departments"), async (req, res) => {
+  if (!canManageDepartments(req.user.member.role)) {
+    return res.status(403).json({ error: "You cannot delete departments" });
+  }
+  const db = getDb();
+  const existing = await db.prepare("SELECT id, name FROM departments WHERE id = ?").get(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Department not found" });
+
+  await db.prepare("UPDATE announcements SET target_id = NULL WHERE target = 'department' AND target_id = ?").run(req.params.id);
+  await db.prepare("DELETE FROM departments WHERE id = ?").run(req.params.id);
+  await logAudit(req.user.member.id, "delete", "department", req.params.id, { name: existing.name });
+  res.json({ ok: true });
 });
 
 // ─── Attendance ────────────────────────────────────────────────────────────────
@@ -649,8 +745,12 @@ app.post("/api/attendance", authMiddleware, requirePage("attendance"), async (re
     cell_id: req.user.member.cellId,
     fellowship_id: req.user.member.fellowshipId,
   };
-  if (!canRecordAttendance(actor, { type, cellId })) {
-    return res.status(403).json({ error: "You can only record cell attendance for your own cell" });
+  const deptAbilities = req.user.departmentAbilities || [];
+  const mayRecord =
+    canRecordAttendance(actor, { type, cellId }) ||
+    (type === "service" && canRecordServiceAttendanceForUser(actor, deptAbilities));
+  if (!mayRecord) {
+    return res.status(403).json({ error: "You cannot record this attendance" });
   }
 
   if (isCellScopedRole(actor.role)) {
@@ -775,6 +875,31 @@ app.get("/api/attendance/trends", authMiddleware, requirePage("attendance"), asy
 
 // ─── Events ────────────────────────────────────────────────────────────────────
 
+async function loadEventProgramme(db, eventId) {
+  const rows = await db
+    .prepare(
+      `SELECT * FROM tasks WHERE event_id = ? ORDER BY sort_order ASC, scheduled_time ASC, title ASC`
+    )
+    .all(eventId);
+  return Promise.all(
+    rows.map(async (t) => {
+      const assignees = await db
+        .prepare("SELECT member_id FROM task_assignees WHERE task_id = ?")
+        .all(t.id);
+      return {
+        id: t.id,
+        title: t.title,
+        description: t.description || "",
+        scheduledTime: t.scheduled_time || null,
+        sortOrder: t.sort_order ?? 0,
+        status: t.status,
+        priority: t.priority,
+        assigneeIds: assignees.map((r) => r.member_id),
+      };
+    })
+  );
+}
+
 app.get("/api/events", authMiddleware, requirePage("events"), async (req, res) => {
   const db = getDb();
   const events = await db.prepare("SELECT * FROM events ORDER BY date").all();
@@ -784,6 +909,15 @@ app.get("/api/events", authMiddleware, requirePage("events"), async (req, res) =
         const rsvps = await db
           .prepare("SELECT member_id FROM event_rsvps WHERE event_id = ?")
           .all(e.id);
+        const programme = await loadEventProgramme(db, e.id);
+        let programmeStatus = e.programme_status || "none";
+        if (
+          programmeStatus === "none" &&
+          programme.length > 0 &&
+          programme.some((item) => item.assigneeIds.length > 0)
+        ) {
+          programmeStatus = "draft";
+        }
         return {
           id: e.id,
           title: e.title,
@@ -793,6 +927,10 @@ app.get("/api/events", authMiddleware, requirePage("events"), async (req, res) =
           departmentId: e.department_id,
           description: e.description,
           rsvpIds: rsvps.map((r) => r.member_id),
+          programme,
+          programmeStatus,
+          programmeConfirmedAt: e.programme_confirmed_at || null,
+          programmeConfirmedBy: e.programme_confirmed_by || null,
         };
       })
     )
@@ -800,7 +938,7 @@ app.get("/api/events", authMiddleware, requirePage("events"), async (req, res) =
 });
 
 app.post("/api/events", authMiddleware, requirePage("events"), async (req, res) => {
-  if (!canManageEvents(req.user.member.role)) {
+  if (!canManageEventsForUser(req.user.member.role, req.user.departmentAbilities)) {
     return res.status(403).json({ error: "You cannot create church events" });
   }
   const db = getDb();
@@ -811,7 +949,129 @@ app.post("/api/events", authMiddleware, requirePage("events"), async (req, res) 
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(id, title, date, time, location, departmentId || null, description, req.user.member.id);
   await logActivity(db, `Event created: ${title}`, req.user.member.id);
-  res.status(201).json({ id, title, date, time, location, departmentId, description, rsvpIds: [] });
+  res.status(201).json({ id, title, date, time, location, departmentId, description, rsvpIds: [], programme: [] });
+});
+
+app.put("/api/events/:id/programme", authMiddleware, requirePage("events"), async (req, res) => {
+  if (!canManageEventsForUser(req.user.member.role, req.user.departmentAbilities)) {
+    return res.status(403).json({ error: "You cannot edit event programmes" });
+  }
+  const db = getDb();
+  const event = await db.prepare("SELECT id, date, title FROM events WHERE id = ?").get(req.params.id);
+  if (!event) return res.status(404).json({ error: "Event not found" });
+
+  const items = Array.isArray(req.body.items) ? req.body.items : [];
+  await db.prepare("DELETE FROM tasks WHERE event_id = ?").run(req.params.id);
+
+  let hasAssignees = false;
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (!item?.title?.trim()) continue;
+    const taskId = uid();
+    await db
+      .prepare(
+        `INSERT INTO tasks (id, title, description, department_id, due_date, priority, status, created_by, event_id, sort_order, scheduled_time)
+         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`
+      )
+      .run(
+        taskId,
+        item.title.trim(),
+        item.description?.trim() || "",
+        null,
+        event.date,
+        item.priority || "medium",
+        req.user.member.id,
+        req.params.id,
+        item.sortOrder ?? i,
+        item.scheduledTime?.trim() || null
+      );
+    const assigneeIds = Array.isArray(item.assigneeIds) ? item.assigneeIds : [];
+    if (assigneeIds.length) hasAssignees = true;
+    for (const mid of assigneeIds) {
+      await db.prepare("INSERT INTO task_assignees (task_id, member_id, notified) VALUES (?, ?, 0)").run(taskId, mid);
+    }
+  }
+
+  const programmeStatus = items.some((item) => item?.title?.trim())
+    ? hasAssignees
+      ? "draft"
+      : "none"
+    : "none";
+  await db
+    .prepare(
+      `UPDATE events SET programme_status = ?, programme_confirmed_at = NULL, programme_confirmed_by = NULL WHERE id = ?`
+    )
+    .run(programmeStatus, req.params.id);
+
+  if (programmeStatus === "draft") {
+    const pastors = await db
+      .prepare("SELECT id FROM members WHERE active = 1 AND role IN ('Senior Pastor', 'Associate Pastor')")
+      .all();
+    for (const p of pastors) {
+      await notifyMember(
+        db,
+        p.id,
+        "Programme awaiting approval",
+        `${event.title} — confirm the programme to notify assignees`,
+        "event"
+      );
+    }
+  }
+
+  const programme = await loadEventProgramme(db, req.params.id);
+  const updated = await db.prepare("SELECT programme_status FROM events WHERE id = ?").get(req.params.id);
+  res.json({ programme, programmeStatus: updated?.programme_status || programmeStatus });
+});
+
+app.post("/api/events/:id/programme/confirm", authMiddleware, requirePage("events"), async (req, res) => {
+  if (!canConfirmEventProgramme(req.user.member.role)) {
+    return res.status(403).json({ error: "Only a Pastor can confirm event programmes" });
+  }
+  const db = getDb();
+  const event = await db.prepare("SELECT * FROM events WHERE id = ?").get(req.params.id);
+  if (!event) return res.status(404).json({ error: "Event not found" });
+
+  if (event.programme_status === "confirmed") {
+    return res.status(400).json({ error: "Programme is already confirmed" });
+  }
+
+  const tasks = await db.prepare("SELECT id, title FROM tasks WHERE event_id = ?").all(req.params.id);
+  let notifiedCount = 0;
+  for (const task of tasks) {
+    const assignees = await db
+      .prepare("SELECT member_id FROM task_assignees WHERE task_id = ? AND notified = 0")
+      .all(task.id);
+    for (const row of assignees) {
+      await notifyMember(
+        db,
+        row.member_id,
+        "Event programme assignment",
+        `${event.title}: ${task.title}`,
+        "task"
+      );
+      await db
+        .prepare("UPDATE task_assignees SET notified = 1 WHERE task_id = ? AND member_id = ?")
+        .run(task.id, row.member_id);
+      notifiedCount++;
+    }
+  }
+
+  await db
+    .prepare(
+      `UPDATE events SET programme_status = 'confirmed', programme_confirmed_at = datetime('now'), programme_confirmed_by = ? WHERE id = ?`
+    )
+    .run(req.user.member.id, req.params.id);
+
+  await logActivity(db, `Event programme confirmed: ${event.title}`, req.user.member.id);
+
+  const programme = await loadEventProgramme(db, req.params.id);
+  res.json({
+    programme,
+    programmeStatus: "confirmed",
+    programmeConfirmedAt: new Date().toISOString(),
+    programmeConfirmedBy: req.user.member.id,
+    notifiedCount,
+  });
 });
 
 app.post("/api/events/:id/rsvp", authMiddleware, requirePage("events"), async (req, res) => {
@@ -1244,6 +1504,9 @@ app.post("/api/prayers", authMiddleware, requirePage("prayer"), async (req, res)
 });
 
 app.patch("/api/prayers/:id", authMiddleware, requirePage("prayer"), async (req, res) => {
+  if (!canManagePrayerForUser(req.user.member.role, req.user.departmentAbilities)) {
+    return res.status(403).json({ error: "You cannot respond to prayer requests" });
+  }
   const db = getDb();
   const { status, response } = req.body;
   await db.prepare("UPDATE prayer_requests SET status = ?, response = ?, updated_at = datetime('now') WHERE id = ?").run(
@@ -1265,6 +1528,7 @@ app.get("/api/follow-ups", authMiddleware, requirePage("discipleship"), async (r
         id: fu.id,
         name: fu.name,
         contact: fu.contact,
+        memberId: fu.member_id || null,
         stage: fu.stage,
         assignedToId: fu.assigned_to_id,
         createdAt: fu.created_at,
@@ -1277,20 +1541,36 @@ app.get("/api/follow-ups", authMiddleware, requirePage("discipleship"), async (r
 });
 
 app.post("/api/follow-ups", authMiddleware, requirePage("discipleship"), async (req, res) => {
+  if (!canManageDiscipleshipForUser(req.user.member.role, req.user.departmentAbilities)) {
+    return res.status(403).json({ error: "You cannot manage follow-ups" });
+  }
   const db = getDb();
-  const { name, contact, stage, assignedToId } = req.body;
+  const { memberId, stage, assignedToId } = req.body;
+  if (!memberId) return res.status(400).json({ error: "Select a member for this follow-up" });
+  if (!stage) return res.status(400).json({ error: "Stage is required" });
+
+  const member = await db.prepare("SELECT id, name, phone, email FROM members WHERE id = ? AND active = 1").get(memberId);
+  if (!member) return res.status(404).json({ error: "Member not found" });
+
+  const existing = await db.prepare("SELECT id FROM follow_ups WHERE member_id = ?").get(memberId);
+  if (existing) return res.status(409).json({ error: "This member already has an active follow-up" });
+
+  const name = member.name;
+  const contact = member.phone || member.email || "";
   const id = uid();
-  await db.prepare("INSERT INTO follow_ups (id, name, contact, stage, assigned_to_id) VALUES (?, ?, ?, ?, ?)").run(
-    id,
-    name,
-    contact,
-    stage,
-    assignedToId || req.user.member.id
-  );
-  res.status(201).json({ id, name, contact, stage, assignedToId, notes: [] });
+  const assignee = assignedToId || req.user.member.id;
+  await db
+    .prepare(
+      "INSERT INTO follow_ups (id, name, contact, stage, assigned_to_id, member_id) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    .run(id, name, contact, stage, assignee, memberId);
+  res.status(201).json({ id, name, contact, memberId, stage, assignedToId: assignee, notes: [] });
 });
 
 app.post("/api/follow-ups/:id/notes", authMiddleware, requirePage("discipleship"), async (req, res) => {
+  if (!canManageDiscipleshipForUser(req.user.member.role, req.user.departmentAbilities)) {
+    return res.status(403).json({ error: "You cannot add follow-up notes" });
+  }
   const db = getDb();
   const { date, text, outcome } = req.body;
   const id = uid();
@@ -1301,6 +1581,9 @@ app.post("/api/follow-ups/:id/notes", authMiddleware, requirePage("discipleship"
 });
 
 app.patch("/api/follow-ups/:id", authMiddleware, requirePage("discipleship"), async (req, res) => {
+  if (!canManageDiscipleshipForUser(req.user.member.role, req.user.departmentAbilities)) {
+    return res.status(403).json({ error: "You cannot update follow-ups" });
+  }
   const db = getDb();
   const { stage, assignedToId } = req.body;
   if (stage) await db.prepare("UPDATE follow_ups SET stage = ? WHERE id = ?").run(stage, req.params.id);
@@ -1356,6 +1639,9 @@ app.get("/api/announcements", authMiddleware, requirePage("announcements"), asyn
 });
 
 app.post("/api/announcements", authMiddleware, requirePage("announcements"), async (req, res) => {
+  if (!canPostAnnouncementsForUser(req.user.member.role, req.user.departmentAbilities)) {
+    return res.status(403).json({ error: "You cannot post announcements" });
+  }
   const db = getDb();
   const { title, content, target, targetId, targetRole, pinned, expiresAt } = req.body;
   const id = uid();
@@ -1390,11 +1676,19 @@ app.get("/api/tasks", authMiddleware, requirePage("tasks"), async (req, res) => 
         const assignees = await db
           .prepare("SELECT member_id FROM task_assignees WHERE task_id = ?")
           .all(t.id);
+        const eventRow = t.event_id
+          ? await db.prepare("SELECT id, title, date FROM events WHERE id = ?").get(t.event_id)
+          : null;
         return {
           id: t.id,
           title: t.title,
           description: t.description,
           departmentId: t.department_id,
+          eventId: t.event_id || null,
+          eventTitle: eventRow?.title || null,
+          eventDate: eventRow?.date || null,
+          scheduledTime: t.scheduled_time || null,
+          sortOrder: t.sort_order ?? 0,
           dueDate: t.due_date,
           priority: t.priority,
           status: t.status,
@@ -1406,13 +1700,25 @@ app.get("/api/tasks", authMiddleware, requirePage("tasks"), async (req, res) => 
 });
 
 app.post("/api/tasks", authMiddleware, requirePage("tasks"), async (req, res) => {
+  if (!canManageTasksForUser(req.user.member.role, req.user.departmentAbilities)) {
+    return res.status(403).json({ error: "You cannot create tasks" });
+  }
   const db = getDb();
-  const { title, description, departmentId, dueDate, priority, assigneeIds = [] } = req.body;
+  const { title, description, departmentId, dueDate, priority, assigneeIds = [], eventId } = req.body;
   const id = uid();
   await db.prepare(
-    `INSERT INTO tasks (id, title, description, department_id, due_date, priority, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, title, description, departmentId || null, dueDate, priority || "medium", req.user.member.id);
+    `INSERT INTO tasks (id, title, description, department_id, due_date, priority, created_by, event_id, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`
+  ).run(
+    id,
+    title,
+    description,
+    departmentId || null,
+    dueDate,
+    priority || "medium",
+    req.user.member.id,
+    eventId || null
+  );
   for (const mid of assigneeIds) {
     await db.prepare("INSERT INTO task_assignees (task_id, member_id, notified) VALUES (?, ?, 1)").run(id, mid);
     await notifyMember(db, mid, "New task assigned", title, "task");
@@ -1456,10 +1762,11 @@ app.patch("/api/tasks/:id", authMiddleware, requirePage("tasks"), async (req, re
 
 app.get("/api/media/capabilities", authMiddleware, requirePage("media"), async (req, res) => {
   const member = req.user.member;
+  const deptAbilities = req.user.departmentAbilities || [];
   res.json({
-    canUpload: await canUploadMedia(getDb(), member),
+    canUpload: await canUploadMedia(getDb(), member, deptAbilities),
     canApprove: canApproveMedia(member.role),
-    canViewPending: canViewAllMedia(member.role) || (await canUploadMedia(getDb(), member)),
+    canViewPending: canViewAllMedia(member.role) || (await canUploadMedia(getDb(), member, deptAbilities)),
   });
 });
 
@@ -1469,7 +1776,8 @@ app.get("/api/media", authMiddleware, requirePage("media"), async (req, res) => 
   const member = req.user.member;
   let sql = "SELECT * FROM media_items WHERE 1=1";
   const params = [];
-  if (!canViewAllMedia(member.role) && !(await canUploadMedia(db, member))) {
+  const deptAbilities = req.user.departmentAbilities || [];
+  if (!canViewAllMedia(member.role) && !(await canUploadMedia(db, member, deptAbilities))) {
     sql += " AND status = 'approved'";
   }
   if (search) {
@@ -1505,7 +1813,7 @@ app.get("/api/media", authMiddleware, requirePage("media"), async (req, res) => 
 });
 
 app.post("/api/media", authMiddleware, requirePage("media"), upload.single("file"), async (req, res) => {
-  if (!(await canUploadMedia(getDb(), req.user.member))) {
+  if (!(await canUploadMedia(getDb(), req.user.member, req.user.departmentAbilities))) {
     return res.status(403).json({ error: "Upload not permitted" });
   }
   const db = getDb();
@@ -1672,9 +1980,18 @@ app.post("/api/reports/submissions", authMiddleware, requirePage("report-submiss
     dueDate,
   } = req.body;
   const role = req.user.member.role;
-    if (type === "department") {
-    if (!departmentId || !(await isDepartmentHead(db, req.user.member.id))) {
-      return res.status(403).json({ error: "Only department heads can submit department reports" });
+  if (type === "department") {
+    if (!departmentId) {
+      return res.status(400).json({ error: "Department is required for department reports" });
+    }
+    if (!userHasAbility(req.user, "submit_department_report")) {
+      return res.status(403).json({ error: "Your departments do not allow submitting department reports" });
+    }
+    const inDept = await db
+      .prepare("SELECT 1 FROM member_departments WHERE member_id = ? AND department_id = ?")
+      .get(req.user.member.id, departmentId);
+    if (!inDept) {
+      return res.status(403).json({ error: "You can only submit reports for a department you belong to" });
     }
   } else if (type === "fellowship" && role !== "Fellowship Leader") {
     return res.status(403).json({ error: "Fellowship report requires Fellowship Leader role" });

@@ -9,9 +9,17 @@ import {
   validateMemberCreate,
   isCellScopedRole,
   canManageEvents,
+  canManageDepartments,
+  resolveEffectivePages,
+  canAccessPageWithAbilities,
+  canUploadMedia,
   canEditCellAttendance,
   canApproveMedia,
+  isPrivilegedSelfUpdate,
 } from "../../server/rbac.js";
+import { getPresetAbilitiesForName } from "../../server/department-abilities.js";
+import { canEditMemberProfile } from "@/lib/rbac";
+import type { Member } from "@/types/church";
 
 const cellLeader = {
   id: "cl1",
@@ -71,6 +79,27 @@ describe("RBAC", () => {
     ).toBe(false);
   });
 
+  it("Media preset grants upload_media not role name", () => {
+    const preset = getPresetAbilitiesForName("Media & Technical");
+    expect(preset).toContain("upload_media");
+    expect(preset).toContain("access_media");
+  });
+
+  it("department abilities extend nav pages for Church Member", () => {
+    const pages = resolveEffectivePages("Church Member", "standard", ["access_media", "upload_media"]);
+    expect(pages).toContain("media");
+    expect(canAccessPageWithAbilities("Church Member", "media", "standard", ["access_media"])).toBe(true);
+    expect(canAccessPageWithAbilities("Church Member", "finances", "standard", ["access_media"])).toBe(false);
+  });
+
+  it("only pastors and admin can manage departments", () => {
+    expect(canManageDepartments("Senior Pastor")).toBe(true);
+    expect(canManageDepartments("Associate Pastor")).toBe(true);
+    expect(canManageDepartments("Admin")).toBe(true);
+    expect(canManageDepartments("Fellowship Leader")).toBe(false);
+    expect(canManageDepartments("Cell Leader")).toBe(false);
+  });
+
   it("Cell Leader can manage cell members below their rank", () => {
     expect(canManageMember(cellLeader, cellMember)).toBe(true);
     expect(canManageMember(cellLeader, subCellLeader)).toBe(true);
@@ -79,6 +108,30 @@ describe("RBAC", () => {
   it("Cell Leader cannot manage other cell leaders or themselves", () => {
     expect(canManageMember(cellLeader, otherCellLeader)).toBe(false);
     expect(canManageMember(cellLeader, { ...cellLeader, id: cellLeader.id })).toBe(false);
+  });
+
+  it("any member can edit their own profile", () => {
+    const self = {
+      id: "cm1",
+      name: "Member",
+      email: "m@test.com",
+      phone: "",
+      role: "Cell Member" as const,
+      cellId: "cell-a",
+      fellowshipId: "fel-1",
+      departmentIds: [],
+      active: true,
+      joinedAt: "2024-01-01",
+    };
+    expect(canEditMemberProfile(self, self)).toBe(true);
+    expect(canEditMemberProfile(cellLeader, cellMember)).toBe(true);
+    expect(canEditMemberProfile(cellMember, otherCellLeader as unknown as Member)).toBe(false);
+  });
+
+  it("self-update rejects privileged fields", () => {
+    expect(isPrivilegedSelfUpdate({ role: "Admin" })).toBe(true);
+    expect(isPrivilegedSelfUpdate({ cellId: "x" })).toBe(true);
+    expect(isPrivilegedSelfUpdate({ name: "Jane" })).toBe(false);
   });
 
   it("Cell Leader can only assign lower roles", () => {

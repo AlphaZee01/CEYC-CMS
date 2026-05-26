@@ -1,5 +1,100 @@
 # Changelog
 
+## [2026-05-26] — Dashboard stat cards always visible
+
+### Fixed
+- **Pastor dashboard stat row** — Departments, Last Offering, and New at Service were mutually exclusive (only one could show). All core cards now render; New at Service and Last Offering appear as extra cards when data exists.
+
+## [2026-05-25] — Duplicate import fix (ChurchPages)
+
+### Fixed
+- **`ChurchPages.tsx`** — removed duplicate `DEPARTMENT_ABILITIES` import that broke the app bundle
+
+## [2026-05-25] — Department-specific abilities
+
+### Added
+- **`departments.abilities`** — JSON list of capability keys per department; all members in that department inherit them (union across multiple departments)
+- **Preset abilities** by department name (e.g. Media → upload media, Ushering → service attendance) with pastor override in **Ministry Departments** UI
+- **Effective nav pages** — `access_*` abilities grant matching app modules (media, tasks, events, reports, prayer, discipleship, attendance)
+- **API guards** — upload media, manage events/tasks, post announcements, prayer responses, discipleship follow-ups, service attendance, and department reports respect department abilities
+- **`departmentAbilities` on `/api/auth/me`** — client merges into sidebar pages after login or when departments are saved
+
+### Changed
+- Replaced hardcoded `Media` department name check with `upload_media` ability
+- Department report submission uses `submit_department_report` for any member in the department (not only heads)
+
+## [2026-05-25] — Department delete confirmation UI
+
+### Fixed
+- **Delete department** — in-app confirmation modal and Sonner toast on success/error (replaces `window.confirm`, which often does not appear in embedded or PWA browsers)
+
+## [2026-05-25] — Delete departments (pastors & admin)
+
+### Added
+- **`DELETE /api/departments/:id`** — Senior Pastor, Associate Pastor, and Admin can remove a department; member links cascade, events/tasks/reports clear `department_id`, department-targeted announcements lose their target id
+- **Departments page** — delete button (trash icon) on each department card for authorized roles
+
+### Security
+- **`canManageDepartments`** — server and client RBAC; Fellowship Leaders and below cannot create, edit, or delete departments via API
+
+## [2026-05-25] — Logo not displaying (CDN 403)
+
+### Fixed
+- **Church logo** — API now serves uploaded files from `/uploads/` when the saved logo URL points at an external CDN that blocks hotlinking (403); previously the recovered `https://cdnvideos.ceflix.org/…` URL loaded in the browser but failed, so the UI fell back to initials
+
+## [2026-05-25] — App header church branding
+
+### Fixed
+- **Top header** shows church **name** and **logo** again (from Settings / cached branding), with optional tagline on `sm+` screens — restored after the light UI refresh had replaced it with page title / welcome text only
+
+## [2026-05-25] — Event programme pastor confirmation before notify
+
+### Added
+- **Programme approval** — assignees on an event programme are not notified until a Senior or Associate Pastor confirms via **Confirm & notify**
+- **Draft status** — saving a programme with assignees marks it as awaiting pastor approval; pastors receive a notification to review
+- **`POST /api/events/:id/programme/confirm`** — sends task notifications to all programme assignees once confirmed
+
+### Changed
+- **PUT programme** — no longer notifies assignees immediately; uses `task_assignees.notified = 0` until confirmation
+
+## [2026-05-25] — Event programme outline (step 2 of create)
+
+### Added
+- **Create Event wizard** — step 1: event details; step 2: programme outline (activities with time slot, notes, and optional assignees)
+- **`PUT /api/events/:id/programme`** — saves programme items as tasks linked to the event
+- **Event cards** — show numbered programme outline for attendees
+- **Tasks** — display linked event name and scheduled time for programme tasks
+
+### Changed
+- **Tasks schema** — `event_id`, `sort_order`, and `scheduled_time` on tasks for event programmes
+
+## [2026-05-25] — Discipleship follow-up member picker
+
+### Changed
+- **New Follow-up modal** — select a member from the directory (with search) instead of typing name and contact; contact is filled from their profile
+- **`follow_ups.member_id`** — links follow-ups to members; prevents duplicate follow-ups for the same person
+
+## [2026-05-25] — Reports department participation legend
+
+### Changed
+- **Reports page** — Department Participation uses a high-contrast pie palette, donut-style chart, and a two-column legend grid with department name, member count, and percentage (replacing the cramped Recharts legend)
+
+## [2026-05-25] — Local login auth mode fix
+
+### Fixed
+- **Login 400 with seed users** — `USE_SUPABASE_AUTH=true` blocked `/api/auth/login` while a failed `/api/public/config` made the client fall back to JWT; local `.env` now defaults to JWT for SQLite seed accounts
+- **Auth mode loading** — retries `/api/public/config` when the API is briefly unavailable during server restart (avoids proxy 500 → wrong auth path)
+
+## [2026-05-25] — Members can edit their own profile
+
+### Added
+- **Self-service profile edit** — every member can update their own name, email, phone, and date of birth from their profile page
+- **`canEditMemberProfile`** client helper and **`requireMembersPageOrSelf`** API guard so Cell/Church members need not have the Members nav page
+
+### Changed
+- **`PUT /api/members/:id`** — self-updates ignore role, cell, fellowship, departments, and active status; login `users.email` stays in sync when email changes
+- Profile modal shows only contact fields when editing your own profile; leaders still get full edit for members they manage
+
 ## [2026-05-25] — Attendance calendar syntax fix
 
 ### Fixed

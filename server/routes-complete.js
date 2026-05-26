@@ -5,7 +5,7 @@ import { authMiddleware, changePassword, createPasswordReset, resetPasswordWithT
 import {
   canAccessFinances,
   canManageSettings,
-  resolveUserPages,
+  resolveEffectivePages,
   canManageEvents,
 } from "./rbac.js";
 import { logAudit } from "./audit.js";
@@ -186,5 +186,5 @@ export function registerCompletionRoutes(app, { upload, uid, getMemberDepartment
 }
 
 export function patchAuthMeResponse(req, basePages) {
-  return resolveUserPages(req.user.member.role, req.user.accessLevel);
+  return resolveEffectivePages(req.user.member.role, req.user.accessLevel, req.user.departmentAbilities || []);
 }

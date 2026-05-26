@@ -63,25 +63,58 @@ export function recoverUrlFromMangledFilename(filename) {
   return `https://${match[1].replace(/_/g, "/")}.${match[2]}`;
 }
 
-/** Normalize logo URL for API responses — skip missing uploads, recover mangled external URLs. */
+function localUploadRelPath(basename) {
+  if (!basename) return null;
+  const full = path.join(UPLOAD_DIR, basename);
+  if (!fs.existsSync(full)) return null;
+  return `/uploads/${basename}`;
+}
+
+/** If settings point at an external URL, use a matching file in uploads/ when present. */
+export function findLocalLogoForExternalUrl(externalUrl) {
+  if (!externalUrl || !fs.existsSync(UPLOAD_DIR)) return null;
+  try {
+    for (const file of fs.readdirSync(UPLOAD_DIR)) {
+      const recovered = recoverUrlFromMangledFilename(file);
+      if (recovered === externalUrl) return localUploadRelPath(file);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/** Normalize logo URL for API responses — prefer local uploads over blocked external CDNs. */
 export function normalizeLogoUrl(url, req) {
   if (!url || typeof url !== "string") return null;
   const trimmed = url.trim();
   if (!trimmed) return null;
-  if (isExternalUrl(trimmed)) return trimmed;
 
   const basename = path.basename(trimmed.replace(/\\/g, "/"));
-  if (/https?___/i.test(basename)) {
-    const recovered = recoverUrlFromMangledFilename(basename);
-    if (recovered && isExternalUrl(recovered)) return recovered;
-  }
+
+  const directLocal = localUploadRelPath(basename);
+  if (directLocal) return resolveAssetUrl(directLocal, req);
 
   if (trimmed.startsWith("/uploads/")) {
-    const localPath = path.join(UPLOAD_DIR, basename);
-    if (!fs.existsSync(localPath)) {
-      const recovered = recoverUrlFromMangledFilename(basename);
-      if (recovered) return recovered;
-      return null;
+    const recovered = recoverUrlFromMangledFilename(basename);
+    const matched = recovered ? findLocalLogoForExternalUrl(recovered) : null;
+    if (matched) return resolveAssetUrl(matched, req);
+    if (recovered) return recovered;
+    return null;
+  }
+
+  if (isExternalUrl(trimmed)) {
+    const matched = findLocalLogoForExternalUrl(trimmed);
+    if (matched) return resolveAssetUrl(matched, req);
+    return trimmed;
+  }
+
+  if (/https?___/i.test(basename)) {
+    const recovered = recoverUrlFromMangledFilename(basename);
+    if (recovered && isExternalUrl(recovered)) {
+      const matched = findLocalLogoForExternalUrl(recovered);
+      if (matched) return resolveAssetUrl(matched, req);
+      return recovered;
     }
   }
 
@@ -93,17 +126,28 @@ export function normalizeLogoUrlForStorage(url) {
   if (!url || typeof url !== "string") return null;
   const trimmed = url.trim();
   if (!trimmed) return null;
-  if (isExternalUrl(trimmed)) return trimmed;
 
   const basename = path.basename(trimmed.replace(/\\/g, "/"));
+  const directLocal = localUploadRelPath(basename);
+  if (directLocal) return directLocal;
+
+  if (isExternalUrl(trimmed)) {
+    const matched = findLocalLogoForExternalUrl(trimmed);
+    if (matched) return matched;
+    return trimmed;
+  }
+
   if (/https?___/i.test(basename)) {
     const recovered = recoverUrlFromMangledFilename(basename);
-    if (recovered && isExternalUrl(recovered)) return recovered;
+    if (recovered && isExternalUrl(recovered)) {
+      const matched = findLocalLogoForExternalUrl(recovered);
+      if (matched) return matched;
+      return recovered;
+    }
   }
 
   if (trimmed.startsWith("/uploads/")) {
-    const localPath = path.join(UPLOAD_DIR, basename);
-    if (!fs.existsSync(localPath)) return null;
+    if (!localUploadRelPath(basename)) return null;
   }
 
   return trimmed;
