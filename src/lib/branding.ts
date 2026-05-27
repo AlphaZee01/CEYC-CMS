@@ -31,6 +31,26 @@ export function cacheBranding(branding: ChurchBranding) {
   }
 }
 
+export function clearBrandingCache() {
+  try {
+    localStorage.removeItem(CACHE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function brandingFromSettingsRecord(settings: {
+  name?: string;
+  tagline?: string;
+  logoUrl?: string | null;
+}): ChurchBranding {
+  return {
+    name: settings.name || DEFAULT_BRANDING.name,
+    tagline: settings.tagline || DEFAULT_BRANDING.tagline,
+    logoUrl: settings.logoUrl || undefined,
+  };
+}
+
 export async function fetchPublicBranding(): Promise<ChurchBranding> {
   const b = await publicApi<{ name: string; tagline: string; logoUrl: string | null }>("/public/branding");
   const branding: ChurchBranding = {

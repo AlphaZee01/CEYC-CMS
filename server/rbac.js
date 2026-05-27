@@ -17,16 +17,16 @@ export const PAGE_ACCESS = {
     "communications", "prayer", "discipleship", "announcements", "tasks", "media", "report-submissions",
   ],
   Admin: [
-    "dashboard", "members", "attendance", "finances", "settings", "announcements", "tasks", "communications",
+    "dashboard", "members", "attendance", "finances", "settings", "announcements", "tasks", "communications", "prayer",
   ],
   "Fellowship Leader": [
-    "dashboard", "members", "cells", "attendance", "communications", "report-submissions", "announcements", "events",
+    "dashboard", "members", "cells", "attendance", "communications", "report-submissions", "announcements", "events", "prayer",
   ],
   "Cell Leader": [
     "dashboard", "members", "attendance", "communications", "report-submissions", "announcements", "events", "prayer", "media",
   ],
   "Sub-cell Leader": [
-    "dashboard", "members", "attendance", "communications", "announcements", "events", "report-submissions",
+    "dashboard", "members", "attendance", "communications", "announcements", "events", "report-submissions", "prayer",
   ],
   "Cell Member": [
     "dashboard", "communications", "prayer", "media", "announcements", "events",
@@ -94,14 +94,35 @@ export function canPostAnnouncementsForUser(role, departmentAbilities = []) {
     || memberHasAbility(departmentAbilities, "post_announcements");
 }
 
+/** Prayer & intercession team, pastors, and admins can see team-only requests */
+export function canViewPrivatePrayers(role, departmentAbilities = []) {
+  return (
+    ["Senior Pastor", "Associate Pastor", "Admin"].includes(role) ||
+    memberHasAbility(departmentAbilities, "access_prayer") ||
+    memberHasAbility(departmentAbilities, "manage_prayer")
+  );
+}
+
+/** Mark prayed / answered — intercession team with manage_prayer, pastors, admins */
 export function canManagePrayerForUser(role, departmentAbilities = []) {
-  return ["Senior Pastor", "Associate Pastor", "Admin", "Fellowship Leader", "Cell Leader"].includes(role)
-    || memberHasAbility(departmentAbilities, "manage_prayer");
+  return (
+    ["Senior Pastor", "Associate Pastor", "Admin"].includes(role) ||
+    memberHasAbility(departmentAbilities, "manage_prayer")
+  );
 }
 
 export function canManageDiscipleshipForUser(role, departmentAbilities = []) {
   return ["Senior Pastor", "Associate Pastor", "Admin", "Fellowship Leader"].includes(role)
     || memberHasAbility(departmentAbilities, "manage_discipleship");
+}
+
+/** Pastors and admins choose who mentors each student in the class */
+export function canAssignDiscipleshipMentor(role) {
+  return ["Senior Pastor", "Associate Pastor", "Admin"].includes(role);
+}
+
+export function canViewAllDiscipleshipClass(role, departmentAbilities = []) {
+  return canManageDiscipleshipForUser(role, departmentAbilities) || canAssignDiscipleshipMentor(role);
 }
 
 export function canRecordServiceAttendanceForUser(actor, departmentAbilities = []) {
@@ -119,6 +140,27 @@ export function canConfirmEventProgramme(role) {
 
 export async function isDepartmentHead(db, memberId) {
   return !!(await db.prepare("SELECT 1 FROM departments WHERE head_id = ?").get(memberId));
+}
+
+/** Roles that count as ministry leaders for targeted announcements */
+export const LEADER_ROLES = [
+  "Senior Pastor",
+  "Associate Pastor",
+  "Admin",
+  "Fellowship Leader",
+  "Cell Leader",
+  "Sub-cell Leader",
+];
+
+export function hasLeaderRole(role) {
+  return LEADER_ROLES.includes(role);
+}
+
+/** Pastors, cell/fellowship leaders, admins, and department heads */
+export async function receivesLeadersAnnouncement(db, member) {
+  if (!member?.active) return false;
+  if (hasLeaderRole(member.role)) return true;
+  return isDepartmentHead(db, member.id);
 }
 
 export function scopeMemberFilter(user) {

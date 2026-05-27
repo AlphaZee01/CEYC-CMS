@@ -3,15 +3,17 @@ import { Card, cn } from "@/components/church/ui";
 
 export function StatCardsSkeleton({ count = 4, className }: { count?: number; className?: string }) {
   return (
-    <div className={cn("grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4", count > 4 && "xl:grid-cols-6", className)}>
+    <div className={cn("grid grid-cols-1 gap-3 min-[400px]:grid-cols-2 lg:grid-cols-4 [&>*]:min-w-0", className)}>
       {Array.from({ length: count }).map((_, i) => (
-        <Card key={i} className="flex items-start justify-between gap-2 p-3 sm:p-5">
-          <div className="min-w-0 flex-1 space-y-2">
-            <Skeleton className="h-3 w-16 sm:w-20" />
-            <Skeleton className="h-7 w-12 sm:h-8 sm:w-16" />
-            <Skeleton className="h-3 w-24" />
+        <Card key={i} className="min-w-0 p-3 sm:p-5">
+          <div className="flex items-start gap-2.5 sm:gap-3">
+            <Skeleton className="h-10 w-10 shrink-0 rounded-xl sm:h-11 sm:w-11" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <Skeleton className="h-3 w-16 sm:w-20" />
+              <Skeleton className="h-5 w-10 sm:h-8 sm:w-16" />
+              <Skeleton className="h-3 w-24" />
+            </div>
           </div>
-          <Skeleton className="h-9 w-9 shrink-0 rounded-xl sm:h-10 sm:w-10" />
         </Card>
       ))}
     </div>
@@ -163,7 +165,7 @@ export function ChatThreadSkeleton() {
 
 export function AppShellSkeleton() {
   return (
-    <div className="flex min-h-[100dvh] bg-background">
+    <div className="app-viewport flex bg-background px-safe">
       <aside className="hidden w-64 shrink-0 flex-col border-r bg-[hsl(var(--sidebar-background))] p-4 lg:flex">
         <div className="mb-6 flex items-center gap-3">
           <Skeleton className="h-10 w-10 rounded-lg bg-white/10" />
@@ -181,8 +183,8 @@ export function AppShellSkeleton() {
           ))}
         </div>
       </aside>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="border-b border-border bg-card/80 px-4 py-3 pt-safe backdrop-blur-md sm:px-6">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="shrink-0 border-b border-border bg-card/80 px-4 py-3 pt-safe backdrop-blur-md sm:px-6">
           <div className="flex items-center gap-3">
             <Skeleton className="h-9 w-9 shrink-0 rounded-xl" />
             <div className="min-w-0 flex-1 space-y-1.5">
@@ -193,7 +195,7 @@ export function AppShellSkeleton() {
             <Skeleton className="h-10 w-10 rounded-xl" />
           </div>
         </header>
-        <main className="flex-1 p-4 sm:p-6 lg:p-8">
+        <main className="min-h-0 flex-1 overflow-y-auto p-4 pb-mobile-nav sm:p-6 lg:pb-8 lg:p-8">
           <div className="mb-6 flex items-start gap-3">
             <Skeleton className="h-11 w-11 rounded-xl" />
             <div className="space-y-2">

@@ -88,9 +88,17 @@ export function canSubmitDepartmentReport(departmentAbilities?: string[]) {
   return hasDepartmentAbility(departmentAbilities, "submit_department_report");
 }
 
+export function canViewPrivatePrayers(role: Role, departmentAbilities?: string[]) {
+  return (
+    ["Senior Pastor", "Associate Pastor", "Admin"].includes(role) ||
+    hasDepartmentAbility(departmentAbilities, "access_prayer") ||
+    hasDepartmentAbility(departmentAbilities, "manage_prayer")
+  );
+}
+
 export function canManagePrayerForUser(role: Role, departmentAbilities?: string[]) {
   return (
-    ["Senior Pastor", "Associate Pastor", "Admin", "Fellowship Leader", "Cell Leader"].includes(role) ||
+    ["Senior Pastor", "Associate Pastor", "Admin"].includes(role) ||
     hasDepartmentAbility(departmentAbilities, "manage_prayer")
   );
 }
@@ -100,6 +108,14 @@ export function canManageDiscipleshipForUser(role: Role, departmentAbilities?: s
     ["Senior Pastor", "Associate Pastor", "Admin", "Fellowship Leader"].includes(role) ||
     hasDepartmentAbility(departmentAbilities, "manage_discipleship")
   );
+}
+
+export function canAssignDiscipleshipMentor(role: Role) {
+  return role === "Senior Pastor" || role === "Associate Pastor" || role === "Admin";
+}
+
+export function canViewAllDiscipleshipClass(role: Role, departmentAbilities?: string[]) {
+  return canManageDiscipleshipForUser(role, departmentAbilities) || canAssignDiscipleshipMentor(role);
 }
 
 export function canRecordServiceAttendanceForUser(role: Role, departmentAbilities?: string[]) {

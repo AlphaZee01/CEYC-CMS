@@ -81,7 +81,7 @@ export const PAGE_META: { id: PageId; label: string }[] = [
   { id: "communications", label: "Communications" },
   { id: "finances", label: "Finances" },
   { id: "prayer", label: "Prayer Requests" },
-  { id: "discipleship", label: "Discipleship" },
+  { id: "discipleship", label: "New Believers Class" },
   { id: "announcements", label: "Announcements" },
   { id: "tasks", label: "Tasks" },
   { id: "media", label: "Media Library" },

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, LogOut, Menu, X } from "lucide-react";
+import { Bell, LogOut, X } from "lucide-react";
 import { memberProfilePath } from "@/lib/rbac";
 import { Badge, AvatarCircle, cn } from "@/components/church/ui";
 import { PAGE_META, type PageId, type Member } from "@/types/church";
@@ -122,7 +122,7 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
   };
 
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-background">
+    <div className="app-viewport flex bg-background px-safe">
       {sidebarOpen && (
         <div className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm lg:hidden" onClick={() => setSidebarOpen(false)} aria-hidden />
       )}
@@ -179,17 +179,13 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="z-30 shrink-0 border-b border-border bg-card/80 pt-safe backdrop-blur-md">
-          <div className="flex items-center gap-3 px-4 py-3 sm:px-6">
-            <button
-              type="button"
-              className="touch-target flex items-center justify-center rounded-xl text-muted-foreground hover:bg-muted lg:hidden"
-              onClick={() => setSidebarOpen(true)}
-              aria-label="Open menu"
-            >
-              <Menu className="h-5 w-5" />
-            </button>
-
+        <header
+          className={cn(
+            "z-30 shrink-0 border-b border-border bg-card/80 pt-safe backdrop-blur-md",
+            isChatPage && "max-lg:hidden"
+          )}
+        >
+          <div className="flex items-center gap-2 px-4 py-3 sm:gap-3 sm:px-6">
             <div className="min-w-0 flex-1">
               <ChurchBrand
                 name={settings.name}

@@ -65,7 +65,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-[100dvh] bg-background">
+    <div className="flex min-h-[100dvh] min-h-[100svh] overflow-x-hidden bg-background px-safe">
       {/* Brand panel — desktop */}
       <div className="relative hidden w-[42%] max-w-xl flex-col justify-between overflow-hidden bg-primary p-10 text-primary-foreground lg:flex xl:p-14">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(255,255,255,0.15),transparent_55%)]" />

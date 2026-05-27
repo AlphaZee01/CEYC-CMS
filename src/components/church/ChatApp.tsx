@@ -1,33 +1,19 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { ArrowLeft, Megaphone, Search, Send } from "lucide-react";
+import { ArrowLeft, Check, CheckCheck, Clock, Megaphone, Search, Send } from "lucide-react";
+import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { supabase, supabaseConfigured, memberChatChannel } from "@/lib/supabase";
+import {
+  loadActiveChatId,
+  loadConversationCache,
+  saveActiveChatId,
+  saveConversationCache,
+} from "@/lib/chat-cache";
+import type { ChatMessage, Conversation } from "@/lib/chat-types";
 import { cn, AvatarCircle } from "@/components/church/ui";
 import { ChatListSkeleton, ChatThreadSkeleton } from "@/components/church/skeletons";
 import { ICON_TONES, toneFromString } from "@/lib/icon-colors";
 import type { Member } from "@/types/church";
-
-interface ChatMessage {
-  id: string;
-  fromId: string;
-  toIds: string[];
-  subject: string;
-  body: string;
-  sentAt: string;
-  read: boolean;
-  broadcast: boolean;
-}
-
-interface Conversation {
-  id: string;
-  type: "direct" | "broadcast";
-  partnerId: string | null;
-  partnerName: string;
-  partnerRole?: string;
-  lastMessage: string;
-  lastAt: string;
-  unreadCount: number;
-}
 
 interface ChatAppProps {
   members: Member[];
@@ -42,10 +28,53 @@ function formatTime(iso: string) {
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+function MessageStatusIndicator({ message, isMine }: { message: ChatMessage; isMine: boolean }) {
+  if (!isMine) {
+    if (!message.read) {
+      return <span className="text-[10px] font-medium text-highlight">New</span>;
+    }
+    return null;
+  }
+  if (message.failed) {
+    return <span className="text-[10px] font-medium text-red-300">Failed</span>;
+  }
+  if (message.pending) {
+    return (
+      <span className="inline-flex items-center gap-0.5 text-[10px] text-white/70" title="Sending">
+        <Clock className="h-3 w-3" />
+        Sending
+      </span>
+    );
+  }
+  if (message.broadcast) {
+    return (
+      <span className="inline-flex items-center gap-0.5 text-[10px] text-white/70" title="Sent">
+        <Check className="h-3 w-3" />
+        Sent
+      </span>
+    );
+  }
+  if (message.recipientRead) {
+    return (
+      <span className="inline-flex items-center gap-0.5 text-[10px] text-sky-200" title="Read">
+        <CheckCheck className="h-3.5 w-3.5" />
+        Read
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-0.5 text-[10px] text-white/70" title="Delivered">
+      <Check className="h-3 w-3" />
+      Sent
+    </span>
+  );
+}
 
 export function ChatApp({ members, currentUser }: ChatAppProps) {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<Conversation[]>(() =>
+    loadConversationCache(currentUser.id)
+  );
+  const [activeId, setActiveId] = useState<string | null>(() => loadActiveChatId(currentUser.id));
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [search, setSearch] = useState("");
@@ -58,21 +87,33 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
 
   const activeConvo = conversations.find((c) => c.id === activeId);
   const showThread = !!activeId;
+  const isReadOnlyBroadcastThread = !!activeId?.startsWith("broadcast:");
+  const showComposer = !isReadOnlyBroadcastThread;
 
   const scrollToBottom = useCallback(() => {
     const el = messagesRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, []);
 
-  const loadConversations = useCallback((options?: { silent?: boolean }) => {
-    if (!options?.silent) setLoadingList(true);
-    return api<Conversation[]>("/messages/conversations")
-      .then(setConversations)
-      .catch(() => setConversations([]))
-      .finally(() => {
-        if (!options?.silent) setLoadingList(false);
-      });
-  }, []);
+  const loadConversations = useCallback(
+    (options?: { silent?: boolean }) => {
+      if (!options?.silent) setLoadingList(true);
+      return api<Conversation[]>("/messages/conversations")
+        .then((list) => {
+          setConversations(list);
+          saveConversationCache(currentUser.id, list);
+        })
+        .catch((err) => {
+          if (!options?.silent) {
+            toast.error(err instanceof Error ? err.message : "Could not load conversations");
+          }
+        })
+        .finally(() => {
+          if (!options?.silent) setLoadingList(false);
+        });
+    },
+    [currentUser.id]
+  );
 
   const loadThread = useCallback(
     (partnerId: string, options?: { silent?: boolean }) => {
@@ -84,7 +125,12 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
             api(`/messages/${m.id}/read`, { method: "PATCH" }).catch(() => {});
           });
         })
-        .catch(() => setMessages([]))
+        .catch((err) => {
+          if (!options?.silent) {
+            toast.error(err instanceof Error ? err.message : "Could not load messages");
+            setMessages([]);
+          }
+        })
         .finally(() => {
           if (!options?.silent) setLoadingThread(false);
         });
@@ -115,7 +161,7 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
         loadConversations({ silent: true });
         if (!activeId) return;
         const inThread =
-          activeId === "__broadcast__"
+          activeId === "__broadcast__" || activeId.startsWith("broadcast:")
             ? msg.broadcast
             : msg.broadcast
               ? false
@@ -128,6 +174,13 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
             api(`/messages/${msg.id}/read`, { method: "PATCH" }).catch(() => {});
           }
         }
+      })
+      .on("broadcast", { event: "message_read" }, ({ payload }) => {
+        const { messageId } = payload as { messageId?: string };
+        if (!messageId) return;
+        setMessages((prev) =>
+          prev.map((m) => (m.id === messageId ? { ...m, recipientRead: true } : m))
+        );
       })
       .subscribe();
 
@@ -147,9 +200,28 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
   const send = async () => {
     const text = draft.trim();
     if (!text || sending || !activeId) return;
+    if (activeId.startsWith("broadcast:")) {
+      toast.error("Open Church Broadcast from the menu above to send a new announcement.");
+      return;
+    }
     setSending(true);
     const isBroadcast = activeId === "__broadcast__";
     const threadId = activeId;
+    const pendingId = `pending-${Date.now()}`;
+    const optimistic: ChatMessage = {
+      id: pendingId,
+      fromId: currentUser.id,
+      toIds: isBroadcast ? [] : [threadId],
+      subject: "",
+      body: text,
+      sentAt: new Date().toISOString(),
+      read: true,
+      broadcast: isBroadcast,
+      pending: true,
+      recipientRead: false,
+    };
+    setMessages((prev) => [...prev, optimistic]);
+    setDraft("");
     try {
       const sent = await api<{ id: string }>("/messages", {
         method: "POST",
@@ -160,20 +232,25 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
           toIds: isBroadcast ? undefined : [threadId],
         }),
       });
-      setDraft("");
-      const optimistic: ChatMessage = {
-        id: sent.id,
-        fromId: currentUser.id,
-        toIds: isBroadcast ? [] : [threadId],
-        subject: "",
-        body: text,
-        sentAt: new Date().toISOString(),
-        read: true,
-        broadcast: isBroadcast,
-      };
-      setMessages((prev) => (prev.some((m) => m.id === sent.id) ? prev : [...prev, optimistic]));
-      loadConversations({ silent: true });
-      loadThread(threadId, { silent: true });
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === pendingId
+            ? {
+                ...m,
+                id: sent.id,
+                pending: false,
+                failed: false,
+                recipientRead: false,
+              }
+            : m
+        )
+      );
+      await loadConversations({ silent: true });
+    } catch (err) {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === pendingId ? { ...m, pending: false, failed: true } : m))
+      );
+      toast.error(err instanceof Error ? err.message : "Message was not saved");
     } finally {
       setSending(false);
     }
@@ -181,8 +258,13 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
 
   const openChat = (id: string) => {
     setActiveId(id);
+    saveActiveChatId(currentUser.id, id);
     setShowNewChat(false);
   };
+
+  useEffect(() => {
+    saveActiveChatId(currentUser.id, activeId);
+  }, [activeId, currentUser.id]);
 
   const startNewChat = (memberId: string) => {
     const existing = conversations.find((c) => c.partnerId === memberId);
@@ -190,7 +272,7 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
   };
 
   return (
-    <div className="-mx-3 flex h-full min-h-0 overflow-hidden bg-background sm:-mx-4 lg:-mx-6 lg:rounded-xl lg:border lg:border-border">
+    <div className="flex h-full min-h-0 overflow-hidden bg-background lg:-mx-6 lg:rounded-xl lg:border lg:border-border">
       {/* Conversation list */}
       <aside
         className={cn(
@@ -237,7 +319,7 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
             </button>
           )}
 
-          {loadingList ? (
+          {loadingList && conversations.length === 0 ? (
             <ChatListSkeleton />
           ) : conversations.length === 0 ? (
             <p className="p-4 text-sm text-muted-foreground">No conversations yet. Start a chat below.</p>
@@ -368,8 +450,14 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
                           </p>
                         )}
                         <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{m.body}</p>
-                        <p className={cn("mt-1 text-right text-[10px]", mine ? "text-white/70" : "text-muted-foreground")}>
-                          {formatTime(m.sentAt)}
+                        <p
+                          className={cn(
+                            "mt-1 flex items-center justify-end gap-1.5 text-[10px]",
+                            mine ? "text-white/70" : "text-muted-foreground"
+                          )}
+                        >
+                          <MessageStatusIndicator message={m} isMine={mine} />
+                          <span>{formatTime(m.sentAt)}</span>
                         </p>
                       </div>
                     </div>
@@ -378,37 +466,45 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
               )}
             </div>
 
-            <footer className="shrink-0 border-t bg-card p-3 lg:pb-safe">
-              <form
-                className="flex items-end gap-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  send();
-                }}
-              >
-                <textarea
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      send();
-                    }
+            {showComposer ? (
+              <footer className="shrink-0 border-t bg-card p-3 lg:pb-safe">
+                <form
+                  className="flex items-end gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    send();
                   }}
-                  rows={1}
-                  placeholder="Type a message..."
-                  className="max-h-28 min-h-[44px] flex-1 resize-none rounded-2xl border border-input bg-muted/30 px-4 py-2.5 text-base outline-none focus:ring-2 focus:ring-ring sm:text-sm"
-                />
-                <button
-                  type="submit"
-                  disabled={!draft.trim() || sending}
-                  className="touch-target flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-white transition disabled:opacity-40"
-                  aria-label="Send message"
                 >
-                  <Send className="h-5 w-5" />
-                </button>
-              </form>
-            </footer>
+                  <textarea
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        send();
+                      }
+                    }}
+                    rows={1}
+                    placeholder="Type a message..."
+                    className="max-h-28 min-h-[44px] flex-1 resize-none rounded-2xl border border-input bg-muted/30 px-4 py-2.5 text-base outline-none focus:ring-2 focus:ring-ring sm:text-sm"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!draft.trim() || sending}
+                    className="touch-target flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-white transition disabled:opacity-40"
+                    aria-label="Send message"
+                  >
+                    <Send className="h-5 w-5" />
+                  </button>
+                </form>
+              </footer>
+            ) : (
+              <footer className="shrink-0 border-t bg-muted/40 px-4 py-3 text-center text-xs text-muted-foreground lg:pb-safe">
+                {canBroadcast
+                  ? "View only. Use Church Broadcast above to send a new announcement."
+                  : "You can read broadcast messages here but cannot reply in this thread."}
+              </footer>
+            )}
           </>
         )}
       </main>

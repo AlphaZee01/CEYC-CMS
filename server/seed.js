@@ -2,7 +2,8 @@ import bcrypt from "bcryptjs";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getDb } from "./store.js";
+import { getDb, initDatabase } from "./store.js";
+import { useSupabaseDatabase } from "./sql-dialect.js";
 import { getPresetAbilitiesForName, serializeDepartmentAbilities } from "./department-abilities.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -40,6 +41,23 @@ async function clearAll(db) {
 }
 
 export async function seedDatabase(reset = false) {
+  if (useSupabaseDatabase()) {
+    if (reset) {
+      console.error("db:reset is not supported against Supabase. Use the Supabase dashboard or seed SQLite locally.");
+      process.exit(1);
+    }
+    await initDatabase();
+    const db = getDb();
+    const countRow = await db.prepare("SELECT COUNT(*) as c FROM members").get();
+    const count = Number(countRow?.c ?? 0);
+    if (count > 0) {
+      console.log("Supabase database already has members; seed skipped.");
+      return;
+    }
+    console.log("Supabase is empty — run seed with SQLite or add members in Supabase.");
+    return;
+  }
+
   if (reset && fs.existsSync(DB_PATH)) {
     const { resetDbConnection } = await import("./db.js");
     const { resetSqliteConnection } = await import("./store.js");
@@ -259,11 +277,11 @@ export async function ensureDashboardSamples(db) {
   await db.prepare("INSERT INTO task_assignees (task_id, member_id) VALUES (?, ?)").run(taskId, "m7");
 
   await db.prepare(
-    "INSERT INTO follow_ups (id, name, contact, stage, assigned_to_id) VALUES (?, ?, ?, ?, ?)"
-  ).run(uid(), "John Visitor", "+233 24 000 1111", "Visitor", "m4");
+    "INSERT INTO follow_ups (id, name, contact, stage, assigned_to_id, enrolled_by) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(uid(), "John Visitor", "+233 24 000 1111", "Invitee", "m4", "m1");
   await db.prepare(
-    "INSERT INTO follow_ups (id, name, contact, stage, assigned_to_id) VALUES (?, ?, ?, ?, ?)"
-  ).run(uid(), "Mary Convert", "+233 24 000 2222", "New Convert", "m6");
+    "INSERT INTO follow_ups (id, name, contact, stage, assigned_to_id, enrolled_by) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(uid(), "Mary Convert", "+233 24 000 2222", "New Convert", "m6", "m1");
 
   await db.prepare(
     `INSERT INTO cell_reports (id, type, submitter_id, cell_id, fellowship_id, period, attendance_count, new_visitors, description, status, submitted_at, due_date)

@@ -45,7 +45,7 @@ export function MobileBottomNav({
 }) {
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 lg:hidden" aria-label="Main navigation">
-      <div className="pointer-events-none px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2">
+      <div className="pointer-events-none px-[max(1rem,env(safe-area-inset-left))] pb-[max(0.75rem,env(safe-area-inset-bottom))] pr-[max(1rem,env(safe-area-inset-right))] pt-2">
         <div className="pointer-events-auto mx-auto flex max-w-md items-stretch justify-around gap-1 rounded-2xl border border-border/80 bg-card/95 p-1.5 shadow-lg backdrop-blur-xl supports-[backdrop-filter]:bg-card/90">
           {items.map((id) => {
             const Icon = PAGE_ICONS[id];

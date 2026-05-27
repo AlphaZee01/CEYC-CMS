@@ -31,7 +31,7 @@ export const ABILITY_LABELS = {
   access_prayer: "Access Prayer Requests",
   manage_prayer: "Respond to prayer requests",
   access_discipleship: "Access Discipleship",
-  manage_discipleship: "Manage follow-ups",
+  manage_discipleship: "Manage new believers class",
   access_attendance: "Access Attendance",
   record_service_attendance: "Record service attendance",
   post_announcements: "Post announcements",

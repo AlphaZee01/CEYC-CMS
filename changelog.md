@@ -1,5 +1,132 @@
 # Changelog
 
+## [2026-05-27] — Supabase as primary database
+
+### Added
+- **Supabase Postgres backend** — when `DATABASE_URL` and `USE_SUPABASE_DB=true` are set, the API reads/writes all pages through your Supabase database instead of local SQLite.
+- **SQL adapter** — translates app queries for Postgres (dates, booleans, placeholders).
+- **Schema migration** — `supabase/migrations/20260527120000_align_app_schema.sql` adds columns/constraints the app expects (events programme, media approval, department abilities, leaders announcements, etc.).
+
+### Changed
+- **`/api/health`** — reports `database: supabase` or `sqlite`.
+- **`db:reset`** — blocked when pointed at Supabase to avoid wiping production data.
+
+### Setup
+Either paste the full **DATABASE_URL** (pooler URI from the dashboard), or set only **`SUPABASE_DB_PASSWORD`** with your existing **`SUPABASE_PROJECT_REF`** — the server builds the pooler URL for you.
+
+## [2026-05-27] — Attendance calendar clarity
+
+### Changed
+- **Attendance calendar** — each day shows a clear green count of people present; tapping a day lists everyone who was present, grouped by fellowship then cell (with meeting tabs when multiple meetings share a day).
+
+## [2026-05-27] — Attendance UI upgrade
+
+### Changed
+- **Attendance page** — summary stat cards (monthly records, last service/cell, turnout); **Record** action in header; redesigned record flow with roster search, mark all/clear, progress bar, tap-to-toggle present, and sticky save.
+- **By member** — attendance rate progress bars on each member card.
+- **Trends chart** — dynamic cell names from data instead of hardcoded series.
+
+## [2026-05-27] — Dashboard announcement details
+
+### Changed
+- **Dashboard announcements** — each notice shows full message body, audience target, and expiry (and post date when available), not just the title.
+- **Visibility** — dashboard uses the same targeting rules as the Announcements page; up to five active items are shown.
+
+## [2026-05-27] — Media library Google Drive links
+
+### Changed
+- **Media upload modal** — removed the Topic field from the add-media form.
+- **Media upload** — for videos, choose **Upload file** or **Google Drive link**; link mode accepts a Drive share URL instead of uploading the file to the server.
+- **Media playback** — Google Drive videos play in an embedded preview player; other videos still use the native `<video>` element.
+- **Media actions** — Drive items show **Open in Drive** instead of download.
+
+## [2026-05-27] — Finances modals
+
+### Changed
+- **Finances export** — export dialog uses a smaller compact layout (`sm` modal size).
+- **Record Income** — moved from an inline card to a **Record Income** modal opened from the Tithe Ledger tab header; ledger tab shows only the member tithe & offering list.
+- **Record Expense** — same modal pattern on the Expenses tab; inline form removed.
+- **Modal & header actions** — Cancel/Save (and Export) buttons sit on one horizontal row in finance modals; page header actions use a single horizontal row on mobile.
+
+## [2026-05-26] — Finance export date range modal
+
+### Changed
+- **Finances export** — clicking **Export** opens a modal to choose from/to dates and presets before downloading CSV; live preview shows transaction count and income/expense totals for the range. Main page lists show all records.
+
+## [2026-05-26] — Chat message status indicators
+
+### Added
+- **Chat** — outgoing messages show status: Sending, Sent, Read (double check), or Failed; incoming unread messages show a “New” label until opened.
+- **Read receipts** — when a recipient reads a direct message, the sender is notified in real time and status updates to Read.
+
+## [2026-05-26] — Prayer requests: visibility for all members
+
+### Changed
+- **Prayer page** — all member roles can access and submit requests with a clear choice: visible to **everyone in the church** or **prayer & intercession team, pastors & admin only** (team-only / private).
+- **Visibility rules** — public requests appear on the church wall for all members; team-only requests are visible only to pastors, admins, and members with prayer department access (`access_prayer` / `manage_prayer`).
+- **Intercession workflow** — responding (mark prayed / answered) is limited to pastors, admins, and `manage_prayer`; filters for All, My requests, Church wall, and Team only.
+
+## [2026-05-26] — Edit and delete mentoring sessions
+
+### Added
+- **New Believers Class** — mentors and class managers can edit or delete individual session logs (date, notes, outcome) via `PATCH` / `DELETE` on `/api/follow-ups/:id/notes/:noteId`.
+
+## [2026-05-26] — New Believers Class (discipleship)
+
+### Changed
+- **Discipleship page** — redesigned as a mentor-led class: enroll church members or guest invitees, assign mentors (pastors/admins), group roster by mentor, log mentoring sessions, and track progress stages (Invitee → New Convert → In Training → Graduated).
+- **Mentor view** — assigned mentors see only their students and can log sessions and update progress; pastors/admins see the full class and reassign mentors.
+- **API** — follow-ups filtered by mentor; guest enrollment; mentor assignment restricted to pastors/admins; DELETE to remove students from class.
+
+## [2026-05-26] — Announcements for all leaders
+
+### Added
+- **Target: All leaders** — post announcements visible only to ministry leaders (pastors, admins, fellowship/cell/sub-cell leaders, and department heads). Regular members and church/cell members do not see these notices.
+
+## [2026-05-26] — Edit and delete announcements
+
+### Added
+- **Announcements page** — users who can post announcements see Edit and Delete on each notice; edit reuses the post form (title, content, target, expiry, pin).
+- **API** — `PATCH /api/announcements/:id` and secured `DELETE /api/announcements/:id` (same permission as posting); managers see all announcements including expired for upkeep.
+
+## [2026-05-26] — Dashboard stats show after overview API failure
+
+### Fixed
+- **Pastor/Admin dashboard** — when `GET /api/dashboard/overview` failed, the UI fell back to stat cards with zeros because `/dashboard/stats` was never requested and errors were swallowed. Overview failures now toast, load stats as a fallback, and seed counts from bootstrap data so member/cell/fellowship/department totals still appear.
+- **Non-pastoral dashboard** — failed `/dashboard/stats` now toasts and uses bootstrap counts instead of all zeros.
+- **Server** — `dashboard/overview` wrapped in try/catch; invalid birthday rows no longer crash the whole overview response.
+
+## [2026-05-26] — Chat conversations persist across refresh
+
+### Fixed
+- **Conversation list** — failed API loads no longer wipe the UI with an empty list; last successful list is cached in `sessionStorage` per user
+- **Message send** — errors surface via toast instead of failing silently; invalid broadcast thread replies are blocked
+- **Active chat** — last open thread is restored after refresh when still available
+- **Direct messages** — server rejects sends with no valid recipient so threads are always stored in the database
+- **Broadcast history threads** — read-only (no broken reply box); cached list stays visible while refreshing
+
+## [2026-05-26] — Church name/logo persist after refresh
+
+### Fixed
+- **Branding cache** — saving settings or uploading a logo now updates `localStorage` and auth branding immediately; bootstrap no longer falls back to stale cached name/logo after reload
+- **Settings API** — `PUT /api/settings` and `POST /api/settings/logo` return resolved `branding` from the database
+- **Logo URLs** — `/uploads/…` paths from the database stay served even when the file check fails, so the header does not revert to an old cached logo
+
+## [2026-05-26] — Dashboard stat cards on small screens
+
+### Fixed
+- **Stat cards** — icon moved to the left with stacked text so labels and values are readable in narrow columns; long values wrap instead of truncating
+- **Stat grid** — single column below 400px width, then 2 columns, then 4 on large screens; grid children use `min-w-0` to prevent overflow clipping
+- **Stat typography** — smaller value/label sizes on phones (`text-base` / `text-sm` for long values); dashboard mini-stat tiles and skeletons scaled down to match
+
+## [2026-05-26] — Mobile layout CSS fixes
+
+### Fixed
+- **Viewport shell** — use `100svh` with `100dvh` fallback, `overflow-x: hidden`, and `#root` min-height so the app fills the screen without horizontal scroll on phones
+- **Safe areas** — moved horizontal insets from `body` to app shells (`px-safe`) so fixed bottom nav and content align
+- **Chat on mobile** — hide duplicate app header on small screens; remove negative horizontal margins that caused overflow
+- **Loading shell** — auth skeleton matches app flex scroll layout and bottom-nav padding
+
 ## [2026-05-26] — Dashboard stat cards always visible
 
 ### Fixed

@@ -24,6 +24,8 @@ import {
   ReportSubmissionsPage,
 } from "@/pages/church/ChurchPages";
 import type { PageId, Member, Cell, Fellowship, Department, Role } from "@/types/church";
+import { brandingFromSettingsRecord } from "@/lib/branding";
+import type { ChurchSettings } from "@/pages/church/ChurchPages";
 import { PAGE_META } from "@/types/church";
 import { useEffect } from "react";
 import { Toaster } from "sonner";
@@ -51,7 +53,7 @@ function isPastoralRole(role: Role) {
 }
 
 function ChurchApp() {
-  const { user, pages, branding } = useAuth();
+  const { user, pages, branding, syncBranding } = useAuth();
   const { data, loading, reload } = useBootstrap(!!user);
   const location = useLocation();
   const navigate = useNavigate();
@@ -75,13 +77,19 @@ function ChurchApp() {
     navigate(pageToPath(page));
   };
 
+  const bootstrapSettings = data?.settings as ChurchSettings | undefined;
+
+  useEffect(() => {
+    if (!bootstrapSettings?.name) return;
+    syncBranding(brandingFromSettingsRecord(bootstrapSettings));
+  }, [bootstrapSettings?.name, bootstrapSettings?.tagline, bootstrapSettings?.logoUrl, syncBranding]);
+
   if (!user) return null;
 
-  const layoutSettings = {
-    name: (data?.settings?.name as string) || branding.name,
-    logoUrl: (data?.settings?.logoUrl as string | undefined) || branding.logoUrl,
-    tagline: (data?.settings?.tagline as string | undefined) || branding.tagline,
-  };
+  const layoutSettings =
+    bootstrapSettings?.name
+      ? brandingFromSettingsRecord(bootstrapSettings)
+      : branding;
 
   if (loading || !data) {
     return (

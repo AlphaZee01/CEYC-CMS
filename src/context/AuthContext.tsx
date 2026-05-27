@@ -9,7 +9,13 @@ import {
   isRefreshTokenError,
 } from "@/lib/supabase";
 import type { AuthUser, PageId } from "@/types/church";
-import { cacheBranding, getCachedBranding, type ChurchBranding, DEFAULT_BRANDING } from "@/lib/branding";
+import {
+  cacheBranding,
+  clearBrandingCache,
+  getCachedBranding,
+  type ChurchBranding,
+  DEFAULT_BRANDING,
+} from "@/lib/branding";
 import { authLog, authLogError, authLogStart, authLogTimed } from "@/lib/auth-log";
 
 interface AuthState {
@@ -21,6 +27,7 @@ interface AuthState {
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
   refresh: () => Promise<void>;
+  syncBranding: (branding: ChurchBranding) => void;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -182,17 +189,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     authLog("Sign-in complete");
   };
 
+  const syncBranding = useCallback((next: ChurchBranding) => {
+    setBranding(next);
+    cacheBranding(next);
+  }, []);
+
   const logout = async () => {
     if (useSupabaseForAuth()) await signOutSupabase();
     setToken(null);
     setUser(null);
     setPages([]);
     setDepartmentAbilities([]);
+    clearBrandingCache();
     setBranding(DEFAULT_BRANDING);
   };
 
   return (
-    <AuthContext.Provider value={{ user, pages, departmentAbilities, branding, loading, login, logout, refresh }}>
+    <AuthContext.Provider
+      value={{ user, pages, departmentAbilities, branding, loading, login, logout, refresh, syncBranding }}
+    >
       {children}
     </AuthContext.Provider>
   );

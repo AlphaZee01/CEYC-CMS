@@ -183,8 +183,9 @@ export function initSchema() {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       contact TEXT,
-      stage TEXT NOT NULL CHECK (stage IN ('Visitor', 'New Convert', 'Cell Member', 'Worker')),
+      stage TEXT NOT NULL CHECK (stage IN ('Invitee', 'New Convert', 'In Training', 'Graduated')),
       assigned_to_id TEXT REFERENCES members(id) ON DELETE SET NULL,
+      enrolled_by TEXT REFERENCES members(id) ON DELETE SET NULL,
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -201,7 +202,7 @@ export function initSchema() {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       content TEXT NOT NULL,
-      target TEXT NOT NULL CHECK (target IN ('all', 'fellowship', 'cell', 'department', 'role')),
+      target TEXT NOT NULL CHECK (target IN ('all', 'fellowship', 'cell', 'department', 'role', 'leaders')),
       target_id TEXT,
       target_role TEXT,
       pinned INTEGER DEFAULT 0,
@@ -380,6 +381,36 @@ function migrateColumns(db) {
   if (!fuCols.includes("member_id")) {
     db.exec("ALTER TABLE follow_ups ADD COLUMN member_id TEXT REFERENCES members(id) ON DELETE SET NULL");
   }
+  if (!fuCols.includes("enrolled_by")) {
+    db.exec("ALTER TABLE follow_ups ADD COLUMN enrolled_by TEXT REFERENCES members(id) ON DELETE SET NULL");
+  }
+  const fuDef = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='follow_ups'").get();
+  if (fuDef?.sql && fuDef.sql.includes("'Visitor'")) {
+    db.exec(`
+      CREATE TABLE follow_ups_mig (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        contact TEXT,
+        stage TEXT NOT NULL CHECK (stage IN ('Invitee', 'New Convert', 'In Training', 'Graduated')),
+        assigned_to_id TEXT REFERENCES members(id) ON DELETE SET NULL,
+        member_id TEXT REFERENCES members(id) ON DELETE SET NULL,
+        enrolled_by TEXT REFERENCES members(id) ON DELETE SET NULL,
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+      INSERT INTO follow_ups_mig (id, name, contact, stage, assigned_to_id, member_id, enrolled_by, created_at)
+      SELECT id, name, contact,
+        CASE stage
+          WHEN 'Visitor' THEN 'Invitee'
+          WHEN 'Cell Member' THEN 'In Training'
+          WHEN 'Worker' THEN 'Graduated'
+          ELSE stage
+        END,
+        assigned_to_id, member_id, enrolled_by, created_at
+      FROM follow_ups;
+      DROP TABLE follow_ups;
+      ALTER TABLE follow_ups_mig RENAME TO follow_ups;
+    `);
+  }
   const taskCols = db.prepare("PRAGMA table_info(tasks)").all().map((c) => c.name);
   if (!taskCols.includes("event_id")) {
     db.exec("ALTER TABLE tasks ADD COLUMN event_id TEXT REFERENCES events(id) ON DELETE CASCADE");
@@ -399,6 +430,26 @@ function migrateColumns(db) {
   }
   if (!eventCols.includes("programme_confirmed_by")) {
     db.exec("ALTER TABLE events ADD COLUMN programme_confirmed_by TEXT REFERENCES members(id) ON DELETE SET NULL");
+  }
+  const annDef = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='announcements'").get();
+  if (annDef?.sql && !annDef.sql.includes("'leaders'")) {
+    db.exec(`
+      CREATE TABLE announcements_mig (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        target TEXT NOT NULL CHECK (target IN ('all', 'fellowship', 'cell', 'department', 'role', 'leaders')),
+        target_id TEXT,
+        target_role TEXT,
+        pinned INTEGER DEFAULT 0,
+        expires_at TEXT NOT NULL,
+        created_by TEXT REFERENCES members(id),
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+      INSERT INTO announcements_mig SELECT * FROM announcements;
+      DROP TABLE announcements;
+      ALTER TABLE announcements_mig RENAME TO announcements;
+    `);
   }
   const deptCols = db.prepare("PRAGMA table_info(departments)").all().map((c) => c.name);
   if (!deptCols.includes("abilities")) {

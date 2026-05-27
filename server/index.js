@@ -6,6 +6,7 @@ import fs from "fs";
 import multer from "multer";
 import { fileURLToPath } from "url";
 import { getDb, initDatabase } from "./store.js";
+import { useSupabaseDatabase } from "./sql-dialect.js";
 import { memberToJson, logActivity, notifyMember } from "./db.js";
 import { authMiddleware, loginUser, requirePage, requireMembersPageOrSelf } from "./auth.js";
 import {
@@ -18,7 +19,7 @@ import { registerCompletionRoutes } from "./routes-complete.js";
 import { startJobs } from "./jobs.js";
 import { logAudit } from "./audit.js";
 import { formatCurrency } from "./currency.js";
-import { broadcastChatMessage } from "./realtime.js";
+import { broadcastChatMessage, broadcastMessageRead } from "./realtime.js";
 import {
   canAccessFinances,
   canManageSettings,
@@ -32,8 +33,12 @@ import {
   canConfirmEventProgramme,
   canManageTasksForUser,
   canPostAnnouncementsForUser,
+  receivesLeadersAnnouncement,
   canManagePrayerForUser,
+  canViewPrivatePrayers,
   canManageDiscipleshipForUser,
+  canAssignDiscipleshipMentor,
+  canViewAllDiscipleshipClass,
   canRecordServiceAttendanceForUser,
   userHasAbility,
   scopeMemberFilter,
@@ -49,6 +54,7 @@ import { canViewBirthdays, getBirthdaysForMonth } from "./birthdays.js";
 import { syncAuthUsers, createSupabaseAuthUser, updateSupabaseAuthPassword } from "./auth-sync.js";
 import { useSupabaseAuth } from "./supabase.js";
 import { persistUploadedFile, brandingFromSettings, normalizeLogoUrlForStorage } from "./storage.js";
+import { isGoogleDriveUrl, normalizeGoogleDriveUrl } from "./media-url.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -86,7 +92,11 @@ app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, database: "sqlite" });
+  res.json({
+    ok: true,
+    database: useSupabaseDatabase() ? "supabase" : "sqlite",
+    storage: process.env.USE_SUPABASE_STORAGE === "true" ? "supabase" : "local",
+  });
 });
 
 const authLimiter = (await import("express-rate-limit")).default({
@@ -1223,12 +1233,23 @@ app.get("/api/messages/thread/:partnerId", authMiddleware, requirePage("communic
       .all(mid, partnerId, partnerId, mid);
   }
 
+  const directPartner =
+    partnerId && !partnerId.startsWith("broadcast") && partnerId !== "__broadcast__" ? partnerId : null;
+
   const result = await Promise.all(
     rows.map(async (m) => {
       const recips = await db.prepare("SELECT member_id FROM message_recipients WHERE message_id = ?").all(m.id);
       const readRow = await db
         .prepare("SELECT read FROM message_recipients WHERE message_id = ? AND member_id = ?")
         .get(m.id, mid);
+      const isMine = m.from_id === mid;
+      let recipientRead;
+      if (isMine && directPartner && !m.broadcast) {
+        const recipRow = await db
+          .prepare("SELECT read FROM message_recipients WHERE message_id = ? AND member_id = ?")
+          .get(m.id, directPartner);
+        recipientRead = !!recipRow?.read;
+      }
       return {
         id: m.id,
         fromId: m.from_id,
@@ -1237,7 +1258,8 @@ app.get("/api/messages/thread/:partnerId", authMiddleware, requirePage("communic
         sentAt: m.sent_at,
         broadcast: !!m.broadcast,
         toIds: recips.map((r) => r.member_id),
-        read: m.from_id === mid ? true : !!readRow?.read,
+        read: isMine ? true : !!readRow?.read,
+        recipientRead,
       };
     })
   );
@@ -1300,8 +1322,11 @@ app.post("/api/messages", authMiddleware, requirePage("communications"), async (
       return res.status(403).json({ error: "Cannot broadcast" });
     recipients = (await db.prepare("SELECT id FROM members WHERE active = 1").all()).map((m) => m.id);
   } else {
+    recipients = [...new Set((recipients || []).filter((id) => typeof id === "string" && id.trim()))];
+    if (!recipients.length) return res.status(400).json({ error: "Choose who to message" });
     for (const tid of recipients) {
       const target = await db.prepare("SELECT * FROM members WHERE id = ?").get(tid);
+      if (!target) return res.status(400).json({ error: "Invalid recipient" });
       if (!canMessageTarget(sender, target)) return res.status(403).json({ error: `Cannot message ${target?.name}` });
     }
   }
@@ -1337,10 +1362,16 @@ app.post("/api/messages", authMiddleware, requirePage("communications"), async (
 
 app.patch("/api/messages/:id/read", authMiddleware, async (req, res) => {
   const db = getDb();
-  await db.prepare("UPDATE message_recipients SET read = 1 WHERE message_id = ? AND member_id = ?").run(
-    req.params.id,
-    req.user.member.id
-  );
+  const readerId = req.user.member.id;
+  const result = await db
+    .prepare("UPDATE message_recipients SET read = 1 WHERE message_id = ? AND member_id = ? AND read = 0")
+    .run(req.params.id, readerId);
+  if (result.changes > 0) {
+    const msg = await db.prepare("SELECT from_id, broadcast FROM messages WHERE id = ?").get(req.params.id);
+    if (msg?.from_id && msg.from_id !== readerId && !msg.broadcast) {
+      broadcastMessageRead(msg.from_id, { messageId: req.params.id, readBy: readerId }).catch(() => {});
+    }
+  }
   res.json({ ok: true });
 });
 
@@ -1470,15 +1501,17 @@ app.post("/api/finances", authMiddleware, async (req, res) => {
 
 app.get("/api/prayers", authMiddleware, requirePage("prayer"), async (req, res) => {
   const db = getDb();
-  const role = req.user.member.role;
-  let rows;
-  if (["Senior Pastor", "Associate Pastor", "Admin"].includes(role) || role.includes("Leader")) {
-    rows = await db.prepare("SELECT * FROM prayer_requests ORDER BY created_at DESC").all();
-  } else {
-    rows = await db
-      .prepare("SELECT * FROM prayer_requests WHERE member_id = ? OR is_private = 0 ORDER BY created_at DESC")
-      .all(req.user.member.id);
-  }
+  const actorId = req.user.member.id;
+  const viewPrivate = canViewPrivatePrayers(req.user.member.role, req.user.departmentAbilities);
+  const rows = viewPrivate
+    ? await db.prepare("SELECT * FROM prayer_requests ORDER BY created_at DESC").all()
+    : await db
+        .prepare(
+          `SELECT * FROM prayer_requests
+           WHERE member_id = ? OR is_private = 0
+           ORDER BY created_at DESC`
+        )
+        .all(actorId);
   res.json(
     rows.map((p) => ({
       id: p.id,
@@ -1489,6 +1522,7 @@ app.get("/api/prayers", authMiddleware, requirePage("prayer"), async (req, res) 
       status: p.status,
       response: p.response,
       createdAt: p.created_at,
+      isMine: p.member_id === actorId,
     }))
   );
 });
@@ -1496,11 +1530,32 @@ app.get("/api/prayers", authMiddleware, requirePage("prayer"), async (req, res) 
 app.post("/api/prayers", authMiddleware, requirePage("prayer"), async (req, res) => {
   const db = getDb();
   const { title, content, isPrivate } = req.body;
+  const trimmedTitle = title?.trim();
+  const trimmedContent = content?.trim();
+  if (!trimmedTitle || !trimmedContent) {
+    return res.status(400).json({ error: "Title and prayer request are required" });
+  }
   const id = uid();
+  const privateFlag = isPrivate ? 1 : 0;
   await db.prepare(
     `INSERT INTO prayer_requests (id, member_id, title, content, is_private) VALUES (?, ?, ?, ?, ?)`
-  ).run(id, req.user.member.id, title, content, isPrivate ? 1 : 0);
-  res.status(201).json({ id, title, content, isPrivate, status: "pending" });
+  ).run(id, req.user.member.id, trimmedTitle, trimmedContent, privateFlag);
+  await logActivity(
+    db,
+    privateFlag
+      ? `Private prayer request submitted: ${trimmedTitle}`
+      : `Prayer request shared with church: ${trimmedTitle}`,
+    req.user.member.id
+  );
+  res.status(201).json({
+    id,
+    memberId: req.user.member.id,
+    title: trimmedTitle,
+    content: trimmedContent,
+    isPrivate: !!privateFlag,
+    status: "pending",
+    isMine: true,
+  });
 });
 
 app.patch("/api/prayers/:id", authMiddleware, requirePage("prayer"), async (req, res) => {
@@ -1517,11 +1572,34 @@ app.patch("/api/prayers/:id", authMiddleware, requirePage("prayer"), async (req,
   res.json({ ok: true });
 });
 
-// ─── Follow-ups ────────────────────────────────────────────────────────────────
+// ─── Discipleship class (follow-ups) ───────────────────────────────────────────
+
+const DISCIPLESHIP_STAGES = new Set(["Invitee", "New Convert", "In Training", "Graduated"]);
+
+async function getFollowUpOr404(db, id, res) {
+  const row = await db.prepare("SELECT * FROM follow_ups WHERE id = ?").get(id);
+  if (!row) {
+    res.status(404).json({ error: "Student not found in class" });
+    return null;
+  }
+  return row;
+}
+
+async function canActOnFollowUp(db, user, followUp) {
+  if (canManageDiscipleshipForUser(user.member.role, user.departmentAbilities)) return true;
+  return followUp.assigned_to_id === user.member.id;
+}
 
 app.get("/api/follow-ups", authMiddleware, requirePage("discipleship"), async (req, res) => {
   const db = getDb();
-  const rows = await db.prepare("SELECT * FROM follow_ups ORDER BY created_at DESC").all();
+  const actor = req.user.member;
+  const viewAll = canViewAllDiscipleshipClass(actor.role, req.user.departmentAbilities);
+  const rows = viewAll
+    ? await db.prepare("SELECT * FROM follow_ups ORDER BY created_at DESC").all()
+    : await db
+        .prepare("SELECT * FROM follow_ups WHERE assigned_to_id = ? ORDER BY created_at DESC")
+        .all(actor.id);
+
   res.json(
     await Promise.all(
       rows.map(async (fu) => ({
@@ -1531,10 +1609,22 @@ app.get("/api/follow-ups", authMiddleware, requirePage("discipleship"), async (r
         memberId: fu.member_id || null,
         stage: fu.stage,
         assignedToId: fu.assigned_to_id,
+        enrolledById: fu.enrolled_by || null,
         createdAt: fu.created_at,
         notes: await db
-          .prepare("SELECT date, text, outcome FROM follow_up_notes WHERE follow_up_id = ? ORDER BY date")
-          .all(fu.id),
+          .prepare(
+            "SELECT id, date, text, outcome, created_by FROM follow_up_notes WHERE follow_up_id = ? ORDER BY date DESC, rowid DESC"
+          )
+          .all(fu.id)
+          .then((notes) =>
+            notes.map((n) => ({
+              id: n.id,
+              date: n.date,
+              text: n.text,
+              outcome: n.outcome,
+              createdById: n.created_by,
+            }))
+          ),
       }))
     )
   );
@@ -1542,100 +1632,253 @@ app.get("/api/follow-ups", authMiddleware, requirePage("discipleship"), async (r
 
 app.post("/api/follow-ups", authMiddleware, requirePage("discipleship"), async (req, res) => {
   if (!canManageDiscipleshipForUser(req.user.member.role, req.user.departmentAbilities)) {
-    return res.status(403).json({ error: "You cannot manage follow-ups" });
+    return res.status(403).json({ error: "You cannot enroll students in the class" });
   }
   const db = getDb();
-  const { memberId, stage, assignedToId } = req.body;
-  if (!memberId) return res.status(400).json({ error: "Select a member for this follow-up" });
-  if (!stage) return res.status(400).json({ error: "Stage is required" });
+  const { memberId, name, contact, stage, assignedToId } = req.body;
+  if (!stage || !DISCIPLESHIP_STAGES.has(stage)) {
+    return res.status(400).json({ error: "Valid class stage is required" });
+  }
 
-  const member = await db.prepare("SELECT id, name, phone, email FROM members WHERE id = ? AND active = 1").get(memberId);
-  if (!member) return res.status(404).json({ error: "Member not found" });
+  let studentName = name?.trim();
+  let studentContact = contact?.trim() || "";
+  let memberRef = null;
 
-  const existing = await db.prepare("SELECT id FROM follow_ups WHERE member_id = ?").get(memberId);
-  if (existing) return res.status(409).json({ error: "This member already has an active follow-up" });
+  if (memberId) {
+    const member = await db.prepare("SELECT id, name, phone, email FROM members WHERE id = ? AND active = 1").get(memberId);
+    if (!member) return res.status(404).json({ error: "Member not found" });
+    const existing = await db.prepare("SELECT id FROM follow_ups WHERE member_id = ?").get(memberId);
+    if (existing) return res.status(409).json({ error: "This person is already enrolled in the class" });
+    studentName = member.name;
+    studentContact = member.phone || member.email || "";
+    memberRef = memberId;
+  } else {
+    if (!studentName) return res.status(400).json({ error: "Name is required for guest invitees" });
+  }
 
-  const name = member.name;
-  const contact = member.phone || member.email || "";
+  let assignee = assignedToId || req.user.member.id;
+  if (canAssignDiscipleshipMentor(req.user.member.role)) {
+    if (!assignedToId) return res.status(400).json({ error: "Select a mentor for this student" });
+    assignee = assignedToId;
+  }
+  const mentor = await db.prepare("SELECT id FROM members WHERE id = ? AND active = 1").get(assignee);
+  if (!mentor) return res.status(400).json({ error: "Selected mentor not found" });
+  if (memberRef && assignee === memberRef) {
+    return res.status(400).json({ error: "A student cannot be their own mentor" });
+  }
+
   const id = uid();
-  const assignee = assignedToId || req.user.member.id;
   await db
     .prepare(
-      "INSERT INTO follow_ups (id, name, contact, stage, assigned_to_id, member_id) VALUES (?, ?, ?, ?, ?, ?)"
+      `INSERT INTO follow_ups (id, name, contact, stage, assigned_to_id, member_id, enrolled_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(id, name, contact, stage, assignee, memberId);
-  res.status(201).json({ id, name, contact, memberId, stage, assignedToId: assignee, notes: [] });
+    .run(id, studentName, studentContact, stage, assignee, memberRef, req.user.member.id);
+
+  await logActivity(db, `Enrolled in discipleship class: ${studentName}`, req.user.member.id);
+  res.status(201).json({
+    id,
+    name: studentName,
+    contact: studentContact,
+    memberId: memberRef,
+    stage,
+    assignedToId: assignee,
+    enrolledById: req.user.member.id,
+    notes: [],
+  });
 });
 
 app.post("/api/follow-ups/:id/notes", authMiddleware, requirePage("discipleship"), async (req, res) => {
-  if (!canManageDiscipleshipForUser(req.user.member.role, req.user.departmentAbilities)) {
-    return res.status(403).json({ error: "You cannot add follow-up notes" });
-  }
   const db = getDb();
+  const fu = await getFollowUpOr404(db, req.params.id, res);
+  if (!fu) return;
+  if (!(await canActOnFollowUp(db, req.user, fu))) {
+    return res.status(403).json({ error: "You can only log sessions for your assigned students" });
+  }
   const { date, text, outcome } = req.body;
+  if (!text?.trim()) return res.status(400).json({ error: "Session notes are required" });
   const id = uid();
+  const sessionDate = date || new Date().toISOString().slice(0, 10);
   await db.prepare(
     "INSERT INTO follow_up_notes (id, follow_up_id, date, text, outcome, created_by) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(id, req.params.id, date || new Date().toISOString().slice(0, 10), text, outcome, req.user.member.id);
-  res.status(201).json({ id, date, text, outcome });
+  ).run(id, req.params.id, sessionDate, text.trim(), outcome?.trim() || "", req.user.member.id);
+  res.status(201).json({ id, date: sessionDate, text: text.trim(), outcome: outcome?.trim() || "" });
+});
+
+async function getFollowUpNoteOr404(db, followUpId, noteId, res) {
+  const row = await db
+    .prepare("SELECT * FROM follow_up_notes WHERE id = ? AND follow_up_id = ?")
+    .get(noteId, followUpId);
+  if (!row) {
+    res.status(404).json({ error: "Session not found" });
+    return null;
+  }
+  return row;
+}
+
+app.patch("/api/follow-ups/:id/notes/:noteId", authMiddleware, requirePage("discipleship"), async (req, res) => {
+  const db = getDb();
+  const fu = await getFollowUpOr404(db, req.params.id, res);
+  if (!fu) return;
+  if (!(await canActOnFollowUp(db, req.user, fu))) {
+    return res.status(403).json({ error: "You can only edit sessions for your assigned students" });
+  }
+  const existing = await getFollowUpNoteOr404(db, req.params.id, req.params.noteId, res);
+  if (!existing) return;
+
+  const { date, text, outcome } = req.body;
+  if (text !== undefined && !text?.trim()) {
+    return res.status(400).json({ error: "Session notes are required" });
+  }
+  const nextDate = date ?? existing.date;
+  const nextText = text !== undefined ? text.trim() : existing.text;
+  const nextOutcome = outcome !== undefined ? (outcome?.trim() || "") : existing.outcome;
+
+  await db
+    .prepare("UPDATE follow_up_notes SET date = ?, text = ?, outcome = ? WHERE id = ?")
+    .run(nextDate, nextText, nextOutcome, req.params.noteId);
+
+  res.json({
+    id: req.params.noteId,
+    date: nextDate,
+    text: nextText,
+    outcome: nextOutcome,
+    createdById: existing.created_by,
+  });
+});
+
+app.delete("/api/follow-ups/:id/notes/:noteId", authMiddleware, requirePage("discipleship"), async (req, res) => {
+  const db = getDb();
+  const fu = await getFollowUpOr404(db, req.params.id, res);
+  if (!fu) return;
+  if (!(await canActOnFollowUp(db, req.user, fu))) {
+    return res.status(403).json({ error: "You can only delete sessions for your assigned students" });
+  }
+  const existing = await getFollowUpNoteOr404(db, req.params.id, req.params.noteId, res);
+  if (!existing) return;
+
+  await db.prepare("DELETE FROM follow_up_notes WHERE id = ?").run(req.params.noteId);
+  res.json({ ok: true });
 });
 
 app.patch("/api/follow-ups/:id", authMiddleware, requirePage("discipleship"), async (req, res) => {
-  if (!canManageDiscipleshipForUser(req.user.member.role, req.user.departmentAbilities)) {
-    return res.status(403).json({ error: "You cannot update follow-ups" });
+  const db = getDb();
+  const fu = await getFollowUpOr404(db, req.params.id, res);
+  if (!fu) return;
+
+  const { stage, assignedToId } = req.body;
+  const canManage = canManageDiscipleshipForUser(req.user.member.role, req.user.departmentAbilities);
+  const isMentor = fu.assigned_to_id === req.user.member.id;
+
+  if (stage !== undefined) {
+    if (!DISCIPLESHIP_STAGES.has(stage)) return res.status(400).json({ error: "Invalid stage" });
+    if (!canManage && !isMentor) {
+      return res.status(403).json({ error: "You cannot update this student's progress" });
+    }
+    await db.prepare("UPDATE follow_ups SET stage = ? WHERE id = ?").run(stage, req.params.id);
+  }
+
+  if (assignedToId !== undefined) {
+    if (!canAssignDiscipleshipMentor(req.user.member.role)) {
+      return res.status(403).json({ error: "Only pastors and admins can assign mentors" });
+    }
+    if (!assignedToId) {
+      return res.status(400).json({ error: "Mentor is required" });
+    }
+    const mentor = await db.prepare("SELECT id FROM members WHERE id = ? AND active = 1").get(assignedToId);
+    if (!mentor) return res.status(400).json({ error: "Selected mentor not found" });
+    if (fu.member_id && assignedToId === fu.member_id) {
+      return res.status(400).json({ error: "A student cannot be their own mentor" });
+    }
+    await db.prepare("UPDATE follow_ups SET assigned_to_id = ? WHERE id = ?").run(assignedToId, req.params.id);
+  }
+
+  res.json({ ok: true });
+});
+
+app.delete("/api/follow-ups/:id", authMiddleware, requirePage("discipleship"), async (req, res) => {
+  if (!canViewAllDiscipleshipClass(req.user.member.role, req.user.departmentAbilities)) {
+    return res.status(403).json({ error: "You cannot remove students from the class" });
   }
   const db = getDb();
-  const { stage, assignedToId } = req.body;
-  if (stage) await db.prepare("UPDATE follow_ups SET stage = ? WHERE id = ?").run(stage, req.params.id);
-  if (assignedToId !== undefined)
-    await db.prepare("UPDATE follow_ups SET assigned_to_id = ? WHERE id = ?").run(assignedToId, req.params.id);
+  const fu = await getFollowUpOr404(db, req.params.id, res);
+  if (!fu) return;
+  await db.prepare("DELETE FROM follow_ups WHERE id = ?").run(req.params.id);
+  await logActivity(db, `Removed from discipleship class: ${fu.name}`, req.user.member.id);
   res.json({ ok: true });
 });
 
 // ─── Announcements ─────────────────────────────────────────────────────────────
 
-app.get("/api/announcements", authMiddleware, requirePage("announcements"), async (req, res) => {
-  const db = getDb();
-  const m = req.user.member;
-  const all = await db
-    .prepare("SELECT * FROM announcements WHERE expires_at >= date('now') ORDER BY pinned DESC, created_at DESC")
-    .all();
+const ANNOUNCEMENT_TARGETS = new Set(["all", "fellowship", "cell", "department", "role", "leaders"]);
+
+function normalizeAnnouncementTarget(target, targetId, targetRole) {
+  if (target === "all" || target === "leaders") return { targetId: null, targetRole: null };
+  if (target === "role") return { targetId: null, targetRole: targetRole || null };
+  return { targetId: targetId || null, targetRole: null };
+}
+
+function announcementToJson(a) {
+  return {
+    id: a.id,
+    title: a.title,
+    content: a.content,
+    target: a.target,
+    targetId: a.target_id,
+    targetRole: a.target_role,
+    pinned: !!a.pinned,
+    expiresAt: a.expires_at,
+    createdAt: a.created_at,
+    createdBy: a.created_by,
+  };
+}
+
+async function filterAnnouncementsForMember(db, member, departmentAbilities, rows) {
+  const canManage = canPostAnnouncementsForUser(member.role, departmentAbilities);
   const filtered = [];
-  for (const a of all) {
+  for (const a of rows) {
+    if (canManage) {
+      filtered.push(a);
+      continue;
+    }
     if (a.target === "all") {
       filtered.push(a);
       continue;
     }
-    if (a.target === "fellowship" && a.target_id === m.fellowshipId) {
+    if (a.target === "fellowship" && a.target_id === member.fellowshipId) {
       filtered.push(a);
       continue;
     }
-    if (a.target === "cell" && a.target_id === m.cellId) {
+    if (a.target === "cell" && a.target_id === member.cellId) {
       filtered.push(a);
       continue;
     }
     if (a.target === "department") {
       const inDept = await db
         .prepare("SELECT 1 FROM member_departments WHERE member_id = ? AND department_id = ?")
-        .get(m.id, a.target_id);
+        .get(member.id, a.target_id);
       if (inDept) filtered.push(a);
       continue;
     }
-    if (a.target === "role" && a.target_role === m.role) filtered.push(a);
+    if (a.target === "role" && a.target_role === member.role) filtered.push(a);
+    if (a.target === "leaders" && (await receivesLeadersAnnouncement(db, member))) filtered.push(a);
   }
-  res.json(
-    filtered.map((a) => ({
-      id: a.id,
-      title: a.title,
-      content: a.content,
-      target: a.target,
-      targetId: a.target_id,
-      targetRole: a.target_role,
-      pinned: !!a.pinned,
-      expiresAt: a.expires_at,
-      createdAt: a.created_at,
-    }))
-  );
+  return filtered;
+}
+
+app.get("/api/announcements", authMiddleware, requirePage("announcements"), async (req, res) => {
+  const db = getDb();
+  const m = req.user.member;
+  const canManage = canPostAnnouncementsForUser(m.role, req.user.departmentAbilities);
+  const all = await db
+    .prepare(
+      canManage
+        ? "SELECT * FROM announcements ORDER BY pinned DESC, created_at DESC"
+        : "SELECT * FROM announcements WHERE expires_at >= date('now') ORDER BY pinned DESC, created_at DESC"
+    )
+    .all();
+  const filtered = await filterAnnouncementsForMember(db, m, req.user.departmentAbilities || [], all);
+  res.json(filtered.map(announcementToJson));
 });
 
 app.post("/api/announcements", authMiddleware, requirePage("announcements"), async (req, res) => {
@@ -1644,13 +1887,86 @@ app.post("/api/announcements", authMiddleware, requirePage("announcements"), asy
   }
   const db = getDb();
   const { title, content, target, targetId, targetRole, pinned, expiresAt } = req.body;
+  if (!ANNOUNCEMENT_TARGETS.has(target)) {
+    return res.status(400).json({ error: "Invalid announcement target" });
+  }
+  const normalized = normalizeAnnouncementTarget(target, targetId, targetRole);
   const id = uid();
   await db.prepare(
     `INSERT INTO announcements (id, title, content, target, target_id, target_role, pinned, expires_at, created_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, title, content, target, targetId || null, targetRole || null, pinned ? 1 : 0, expiresAt, req.user.member.id);
+  ).run(
+    id,
+    title,
+    content,
+    target,
+    normalized.targetId,
+    normalized.targetRole,
+    pinned ? 1 : 0,
+    expiresAt,
+    req.user.member.id
+  );
   await logActivity(db, `Announcement posted: ${title}`, req.user.member.id);
   res.status(201).json({ id, title, content, target, targetId, pinned, expiresAt });
+});
+
+app.patch("/api/announcements/:id", authMiddleware, requirePage("announcements"), async (req, res) => {
+  if (!canPostAnnouncementsForUser(req.user.member.role, req.user.departmentAbilities)) {
+    return res.status(403).json({ error: "You cannot edit announcements" });
+  }
+  const db = getDb();
+  const existing = await db.prepare("SELECT * FROM announcements WHERE id = ?").get(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Announcement not found" });
+
+  const { title, content, target, targetId, targetRole, pinned, expiresAt } = req.body;
+  const nextTitle = title ?? existing.title;
+  const nextContent = content ?? existing.content;
+  const nextTarget = target ?? existing.target;
+  if (target !== undefined && !ANNOUNCEMENT_TARGETS.has(nextTarget)) {
+    return res.status(400).json({ error: "Invalid announcement target" });
+  }
+  const normalized =
+    target !== undefined
+      ? normalizeAnnouncementTarget(nextTarget, targetId, targetRole)
+      : { targetId: existing.target_id, targetRole: existing.target_role };
+  const nextTargetId = target !== undefined ? normalized.targetId : existing.target_id;
+  const nextTargetRole = target !== undefined ? normalized.targetRole : existing.target_role;
+  const nextPinned = pinned !== undefined ? (pinned ? 1 : 0) : existing.pinned;
+  const nextExpiresAt = expiresAt ?? existing.expires_at;
+
+  await db
+    .prepare(
+      `UPDATE announcements SET title = ?, content = ?, target = ?, target_id = ?, target_role = ?, pinned = ?, expires_at = ?
+       WHERE id = ?`
+    )
+    .run(nextTitle, nextContent, nextTarget, nextTargetId, nextTargetRole, nextPinned, nextExpiresAt, req.params.id);
+
+  await logActivity(db, `Announcement updated: ${nextTitle}`, req.user.member.id);
+  res.json({
+    id: req.params.id,
+    title: nextTitle,
+    content: nextContent,
+    target: nextTarget,
+    targetId: nextTargetId,
+    targetRole: nextTargetRole,
+    pinned: !!nextPinned,
+    expiresAt: nextExpiresAt,
+    createdAt: existing.created_at,
+    createdBy: existing.created_by,
+  });
+});
+
+app.delete("/api/announcements/:id", authMiddleware, requirePage("announcements"), async (req, res) => {
+  if (!canPostAnnouncementsForUser(req.user.member.role, req.user.departmentAbilities)) {
+    return res.status(403).json({ error: "You cannot delete announcements" });
+  }
+  const db = getDb();
+  const existing = await db.prepare("SELECT * FROM announcements WHERE id = ?").get(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Announcement not found" });
+
+  await db.prepare("DELETE FROM announcements WHERE id = ?").run(req.params.id);
+  await logActivity(db, `Announcement deleted: ${existing.title}`, req.user.member.id);
+  res.json({ ok: true });
 });
 
 // ─── Tasks ─────────────────────────────────────────────────────────────────────
@@ -1817,7 +2133,7 @@ app.post("/api/media", authMiddleware, requirePage("media"), upload.single("file
     return res.status(403).json({ error: "Upload not permitted" });
   }
   const db = getDb();
-  const { title, type, speaker, series, topic, date, shareTarget, shareTargetId } = req.body;
+  const { title, type, speaker, series, topic, date, shareTarget, shareTargetId, fileUrl: bodyFileUrl, videoUrl } = req.body;
   const id = uid();
   const filePath = req.file?.path || null;
   let fileUrl = null;
@@ -1833,6 +2149,21 @@ app.post("/api/media", authMiddleware, requirePage("media"), upload.single("file
       console.error("Media upload failed:", err.message);
       return res.status(500).json({ error: "File upload failed" });
     }
+  } else {
+    const external = String(bodyFileUrl || videoUrl || "").trim();
+    if (external) {
+      if (!isGoogleDriveUrl(external)) {
+        return res.status(400).json({ error: "Video link must be a Google Drive share URL" });
+      }
+      const normalized = normalizeGoogleDriveUrl(external);
+      if (!normalized) {
+        return res.status(400).json({ error: "Could not parse Google Drive link" });
+      }
+      fileUrl = normalized;
+    }
+  }
+  if (type === "video" && !fileUrl) {
+    return res.status(400).json({ error: "Upload a video file or provide a Google Drive link" });
   }
   const autoApprove = canApproveMedia(req.user.member.role);
   const status = autoApprove ? "approved" : "pending";
@@ -2056,7 +2387,7 @@ app.get("/api/settings", authMiddleware, requirePage("settings"), async (req, re
     email: s.email,
     logoUrl: branding.logoUrl,
     emailConfigured: isEmailConfigured(),
-    database: "sqlite",
+    database: useSupabaseDatabase() ? "supabase" : "sqlite",
   });
 });
 
@@ -2069,7 +2400,8 @@ app.put("/api/settings", authMiddleware, async (req, res) => {
       `UPDATE church_settings SET name=?, tagline=?, address=?, phone=?, email=?, logo_url=? WHERE id=1`
     )
     .run(name, tagline, address, phone, email, storedLogoUrl);
-  res.json({ ok: true, logoUrl: storedLogoUrl });
+  const row = await getDb().prepare("SELECT * FROM church_settings WHERE id = 1").get();
+  res.json({ ok: true, branding: brandingFromSettings(row, req) });
 });
 
 app.get("/api/users", authMiddleware, async (req, res) => {
@@ -2159,6 +2491,7 @@ app.patch("/api/notifications/read-all", authMiddleware, async (req, res) => {
 });
 
 app.get("/api/dashboard/overview", authMiddleware, requirePage("dashboard"), async (req, res) => {
+  try {
   const db = getDb();
   const role = req.user.member.role;
   const pastoral = ["Senior Pastor", "Associate Pastor"].includes(role);
@@ -2282,7 +2615,7 @@ app.get("/api/dashboard/overview", authMiddleware, requirePage("dashboard"), asy
           .all()
       : Promise.resolve([]),
     db
-      .prepare("SELECT id, title, pinned FROM announcements WHERE expires_at >= date('now') ORDER BY pinned DESC, created_at DESC LIMIT 3")
+      .prepare("SELECT * FROM announcements WHERE expires_at >= date('now') ORDER BY pinned DESC, created_at DESC")
       .all(),
     db.prepare("SELECT * FROM events WHERE date >= date('now') ORDER BY date LIMIT 1").get(),
   ]);
@@ -2358,9 +2691,22 @@ app.get("/api/dashboard/overview", authMiddleware, requirePage("dashboard"), asy
     .map(([name, present]) => ({ name, present }))
     .sort((a, b) => b.present - a.present);
 
-  const birthdaysThisMonth = showBirthdays
-    ? await getBirthdaysForMonth(db, now.getFullYear(), now.getMonth() + 1)
-    : null;
+  let birthdaysThisMonth = null;
+  if (showBirthdays) {
+    try {
+      birthdaysThisMonth = await getBirthdaysForMonth(db, now.getFullYear(), now.getMonth() + 1);
+    } catch (err) {
+      console.error("[dashboard/overview] birthdays:", err);
+    }
+  }
+
+  const member = req.user.member;
+  const deptAbilities = req.user.departmentAbilities || [];
+  const visibleAnnouncements = (
+    await filterAnnouncementsForMember(db, member, deptAbilities, announcements)
+  )
+    .slice(0, 5)
+    .map(announcementToJson);
 
   res.json({
     pastoral,
@@ -2415,9 +2761,13 @@ app.get("/api/dashboard/overview", authMiddleware, requirePage("dashboard"), asy
     })),
     followUpsByStage: followUpStages.map((s) => ({ stage: s.stage, count: Number(s.c ?? 0) })),
     nextEvent,
-    announcements: announcements.map((a) => ({ id: a.id, title: a.title, pinned: !!a.pinned })),
+    announcements: visibleAnnouncements,
     birthdaysThisMonth,
   });
+  } catch (err) {
+    console.error("[dashboard/overview]", err);
+    res.status(500).json({ error: "Failed to load dashboard overview" });
+  }
 });
 
 app.get("/api/dashboard/birthdays", authMiddleware, requirePage("dashboard"), async (req, res) => {

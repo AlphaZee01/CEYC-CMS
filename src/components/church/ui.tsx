@@ -220,12 +220,33 @@ export function TabBar<T extends string>({ tabs, value, onChange }: { tabs: { id
   );
 }
 
-export function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+const modalSizes = {
+  sm: "sm:max-w-sm",
+  md: "sm:max-w-md",
+  lg: "sm:max-w-lg",
+};
+
+export function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  size = "lg",
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  size?: keyof typeof modalSizes;
+}) {
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 backdrop-blur-sm sm:items-center sm:p-4" onClick={onClose}>
       <div
-        className="max-h-[92dvh] w-full overflow-y-auto rounded-t-2xl bg-card p-5 pb-safe shadow-2xl sm:max-w-lg sm:rounded-2xl sm:p-6"
+        className={cn(
+          "max-h-[85dvh] w-full overflow-y-auto rounded-t-2xl bg-card p-4 pb-safe shadow-2xl sm:rounded-2xl sm:p-5",
+          modalSizes[size]
+        )}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-5 flex items-start justify-between gap-3">
@@ -268,7 +289,11 @@ export function PageHeader({
 }
 
 export function ModalFooter({ children }: { children: ReactNode }) {
-  return <div className="flex flex-col-reverse gap-2 border-t border-border pt-5 sm:flex-row sm:justify-end">{children}</div>;
+  return (
+    <div className="flex flex-row gap-2 border-t border-border pt-4 [&>*]:min-h-[44px] [&>*]:min-w-0 [&>*]:flex-1 sm:[&>*]:flex-none">
+      {children}
+    </div>
+  );
 }
 
 export function EmptyState({

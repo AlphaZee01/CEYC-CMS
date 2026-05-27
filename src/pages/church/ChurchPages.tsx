@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useMemo, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Users,
@@ -37,6 +37,8 @@ import {
   UserPlus,
   ArrowLeft,
   Mail,
+  Link2,
+  Megaphone,
 } from "lucide-react";
 import {
   LineChart,
@@ -62,6 +64,7 @@ import { Card, Btn, Badge, Input, Select, Textarea, Modal, PageHeader, TabBar, M
 import { DashboardSkeleton, MemberListSkeleton } from "@/components/church/skeletons";
 import { CHART_COLORS, ICON_TONES, ICON_TONE_LIST, pieSegmentColor, type IconTone } from "@/lib/icon-colors";
 import { pageHeaderProps } from "@/lib/page-icons";
+import { getMediaEmbedUrl, getMediaOpenUrl, isGoogleDriveUrl, normalizeGoogleDriveUrl } from "@/lib/media-url";
 import {
   assignableRolesFor,
   canCreateMembers,
@@ -75,7 +78,10 @@ import {
   canPostAnnouncementsForUser,
   canSubmitDepartmentReport,
   canManagePrayerForUser,
+  canViewPrivatePrayers,
   canManageDiscipleshipForUser,
+  canAssignDiscipleshipMentor,
+  canViewAllDiscipleshipClass,
   canRecordServiceAttendanceForUser,
   canConfirmEventProgramme,
   canEditCellAttendance,
@@ -87,6 +93,12 @@ import {
 } from "@/lib/rbac";
 import { EventCalendar } from "@/components/church/EventCalendar";
 import { AttendanceCalendarView, type AttendanceRecord } from "@/components/church/AttendanceCalendar";
+import {
+  AttendanceStatsBar,
+  AttendanceRecordPanel,
+  AttendanceRateBar,
+  attendanceEventLabel,
+} from "@/components/church/AttendanceUI";
 import { ChatApp } from "@/components/church/ChatApp";
 import { PAGE_META, type Member, type Cell, type Fellowship, type Department, type PageId, type Role } from "@/types/church";
 import { useAuth } from "@/context/AuthContext";
@@ -97,10 +109,10 @@ export { CHART_COLORS };
 export const PAGE_ACCESS: Record<Role, PageId[]> = {
   "Senior Pastor": PAGE_META.map((p) => p.id),
   "Associate Pastor": PAGE_META.map((p) => p.id).filter((id) => id !== "settings" && id !== "finances"),
-  Admin: ["dashboard", "members", "attendance", "finances", "settings", "announcements", "tasks", "communications"],
-  "Fellowship Leader": ["dashboard", "members", "cells", "attendance", "communications", "report-submissions", "announcements", "events"],
+  Admin: ["dashboard", "members", "attendance", "finances", "settings", "announcements", "tasks", "communications", "prayer"],
+  "Fellowship Leader": ["dashboard", "members", "cells", "attendance", "communications", "report-submissions", "announcements", "events", "prayer"],
   "Cell Leader": ["dashboard", "members", "attendance", "communications", "report-submissions", "announcements", "events", "prayer", "media"],
-  "Sub-cell Leader": ["dashboard", "members", "attendance", "communications", "announcements", "events", "report-submissions"],
+  "Sub-cell Leader": ["dashboard", "members", "attendance", "communications", "announcements", "events", "report-submissions", "prayer"],
   "Cell Member": ["dashboard", "communications", "prayer", "media", "announcements", "events"],
   "Church Member": ["dashboard", "communications", "prayer", "media", "announcements", "events"],
 };
@@ -129,17 +141,30 @@ export interface PageProps {
   onRefresh: () => void;
 }
 
+const STAT_CARDS_GRID = "grid grid-cols-1 gap-3 min-[400px]:grid-cols-2 lg:grid-cols-4 [&>*]:min-w-0";
+
 function StatCard({ label, value, icon: Icon, tone = "blue", sub }: { label: string; value: string | number; icon: typeof Users; tone?: IconTone; sub?: string }) {
   const t = ICON_TONES[tone];
+  const valueText = String(value);
+  const compactValue = valueText.length > 10;
   return (
-    <div className="surface-card-hover flex items-start justify-between gap-3 p-4 sm:p-5">
-      <div className="min-w-0">
-        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
-        <p className="mt-2 truncate text-2xl font-bold tracking-tight text-foreground sm:text-3xl">{value}</p>
-        {sub && <p className="mt-1 text-xs text-muted-foreground">{sub}</p>}
-      </div>
-      <div className={cn("flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl", t.soft)}>
-        <Icon className={cn("h-5 w-5", t.icon)} strokeWidth={2} />
+    <div className="surface-card-hover min-w-0 p-3 sm:p-5">
+      <div className="flex items-start gap-2.5 sm:gap-3">
+        <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-xl sm:h-11 sm:w-11 sm:rounded-2xl", t.soft)}>
+          <Icon className={cn("h-4 w-4 sm:h-5 sm:w-5", t.icon)} strokeWidth={2} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-semibold uppercase leading-snug tracking-wide text-muted-foreground sm:text-[11px]">{label}</p>
+          <p
+            className={cn(
+              "mt-0.5 font-bold tabular-nums tracking-tight text-foreground sm:mt-1",
+              compactValue ? "break-all text-sm sm:text-lg" : "text-base sm:text-xl lg:text-2xl"
+            )}
+          >
+            {value}
+          </p>
+          {sub && <p className="mt-1 line-clamp-2 text-xs leading-snug text-muted-foreground">{sub}</p>}
+        </div>
       </div>
     </div>
   );
@@ -190,8 +215,73 @@ interface DashboardOverview {
   pendingReports: { id: string; type: string; period: string; submitterName: string; attendanceCount: number; newVisitors: number; status: string }[];
   followUpsByStage: { stage: string; count: number }[];
   nextEvent: { id: string; title: string; date: string; time: string; location: string; rsvpCount: number } | null;
-  announcements: { id: string; title: string; pinned: boolean }[];
+  announcements: DashboardAnnouncementItem[];
   birthdaysThisMonth: BirthdaysMonthSummary | null;
+}
+
+type DashboardAnnouncementItem = {
+  id: string;
+  title: string;
+  content: string;
+  target: "all" | "fellowship" | "cell" | "department" | "role" | "leaders";
+  targetId?: string;
+  targetRole?: string;
+  pinned: boolean;
+  expiresAt: string;
+  createdAt?: string;
+};
+
+function dashboardAnnouncementTargetLabel(
+  a: DashboardAnnouncementItem,
+  ctx: { cells: Cell[]; fellowships: Fellowship[]; departments: Department[] }
+) {
+  if (a.target === "all") return "All members";
+  if (a.target === "fellowship") return ctx.fellowships.find((f) => f.id === a.targetId)?.name || "Fellowship";
+  if (a.target === "cell") return ctx.cells.find((c) => c.id === a.targetId)?.name || "Cell";
+  if (a.target === "department") return ctx.departments.find((d) => d.id === a.targetId)?.name || "Department";
+  if (a.target === "role") return a.targetRole || "Role";
+  if (a.target === "leaders") return "All leaders";
+  return a.target;
+}
+
+function DashboardAnnouncements({
+  items,
+  cells,
+  fellowships,
+  departments,
+}: {
+  items: DashboardAnnouncementItem[];
+  cells: Cell[];
+  fellowships: Fellowship[];
+  departments: Department[];
+}) {
+  if (items.length === 0) return null;
+  return (
+    <DashboardSection title="Announcements" icon={Megaphone} tone="amber">
+      <div className="space-y-4">
+        {items.map((a) => (
+          <div
+            key={a.id}
+            className={cn(
+              "rounded-xl border border-border bg-muted/20 p-4",
+              a.pinned && "border-primary/30 bg-primary/5"
+            )}
+          >
+            <div className="flex flex-wrap items-start gap-2">
+              {a.pinned && <Pin className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />}
+              <h3 className="min-w-0 flex-1 font-semibold text-foreground">{a.title}</h3>
+              <Badge color="teal">{dashboardAnnouncementTargetLabel(a, { cells, fellowships, departments })}</Badge>
+            </div>
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-foreground">{a.content}</p>
+            <p className="mt-3 text-xs text-muted-foreground">
+              Expires {formatMemberDate(a.expiresAt)}
+              {a.createdAt ? ` · Posted ${formatMemberDate(a.createdAt)}` : ""}
+            </p>
+          </div>
+        ))}
+      </div>
+    </DashboardSection>
+  );
 }
 
 interface BirthdayCelebrant {
@@ -385,17 +475,23 @@ function PastorDashboard({
   overview,
   activities,
   events,
+  cells,
+  fellowships,
+  departments,
 }: {
   overview: DashboardOverview;
   activities: { id: string; text: string; time: string }[];
   events: { id: string; title: string; date: string; time: string; rsvpIds: string[] }[];
+  cells: Cell[];
+  fellowships: Fellowship[];
+  departments: Department[];
 }) {
   const { lastService, lastOffering, monthFinances, cellHealth, serviceTrend, lastServiceNewcomers } = overview;
 
   return (
     <div className="space-y-6">
       {/* Church at a glance */}
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+      <div className={STAT_CARDS_GRID}>
         <StatCard label="Members" value={overview.counts.members} icon={Users} tone="indigo" sub={overview.counts.newMembersThisMonth ? `+${overview.counts.newMembersThisMonth} this month` : undefined} />
         <StatCard label="Cells" value={overview.counts.cells} icon={Network} tone="cyan" />
         <StatCard label="Fellowships" value={overview.counts.fellowships} icon={Building2} tone="violet" />
@@ -422,23 +518,23 @@ function PastorDashboard({
               <div className="space-y-4">
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <p className="text-3xl font-bold text-primary">{lastService.present}</p>
+                    <p className="text-2xl font-bold text-primary sm:text-3xl">{lastService.present}</p>
                     <p className="text-sm text-muted-foreground">present on {lastService.date}</p>
                   </div>
                   <DeltaBadge delta={overview.attendanceDelta} />
                 </div>
-                <div className="grid grid-cols-3 gap-2 text-center">
-                  <div className="rounded-lg bg-accent/10 p-3">
-                    <p className="text-lg font-semibold text-accent">{lastService.present}</p>
-                    <p className="text-xs text-muted-foreground">Present</p>
+                <div className="grid grid-cols-3 gap-1.5 text-center sm:gap-2">
+                  <div className="rounded-lg bg-accent/10 p-2 sm:p-3">
+                    <p className="text-base font-semibold text-accent sm:text-lg">{lastService.present}</p>
+                    <p className="text-[10px] text-muted-foreground sm:text-xs">Present</p>
                   </div>
-                  <div className="rounded-lg bg-highlight/10 p-3">
-                    <p className="text-lg font-semibold text-highlight">{lastService.absent}</p>
-                    <p className="text-xs text-muted-foreground">Absent</p>
+                  <div className="rounded-lg bg-highlight/10 p-2 sm:p-3">
+                    <p className="text-base font-semibold text-highlight sm:text-lg">{lastService.absent}</p>
+                    <p className="text-[10px] text-muted-foreground sm:text-xs">Absent</p>
                   </div>
-                  <div className="rounded-lg bg-primary/10 p-3">
-                    <p className="text-lg font-semibold text-primary">{lastServiceNewcomers.total}</p>
-                    <p className="text-xs text-muted-foreground">New</p>
+                  <div className="rounded-lg bg-primary/10 p-2 sm:p-3">
+                    <p className="text-base font-semibold text-primary sm:text-lg">{lastServiceNewcomers.total}</p>
+                    <p className="text-[10px] text-muted-foreground sm:text-xs">New</p>
                   </div>
                 </div>
                 {lastServiceNewcomers.total > 0 && (
@@ -504,19 +600,19 @@ function PastorDashboard({
                 <div className="space-y-4">
                   <div>
                     <p className="text-sm text-muted-foreground">Last service ({lastOffering.date})</p>
-                    <p className="text-2xl font-bold text-primary">{formatCurrency(lastOffering.total)}</p>
+                    <p className="text-xl font-bold text-primary sm:text-2xl">{formatCurrency(lastOffering.total)}</p>
                   </div>
-                  <div className="grid grid-cols-3 gap-2 text-center text-sm">
+                  <div className="grid grid-cols-3 gap-1.5 text-center text-xs sm:gap-2 sm:text-sm">
                     <div className="rounded-lg bg-muted/50 p-2">
-                      <p className="font-semibold">{formatCurrency(lastOffering.tithe)}</p>
+                      <p className="text-sm font-semibold sm:text-base">{formatCurrency(lastOffering.tithe)}</p>
                       <p className="text-xs text-muted-foreground">Tithes</p>
                     </div>
                     <div className="rounded-lg bg-muted/50 p-2">
-                      <p className="font-semibold">{formatCurrency(lastOffering.offering)}</p>
+                      <p className="text-sm font-semibold sm:text-base">{formatCurrency(lastOffering.offering)}</p>
                       <p className="text-xs text-muted-foreground">Offering</p>
                     </div>
                     <div className="rounded-lg bg-muted/50 p-2">
-                      <p className="font-semibold">{formatCurrency(lastOffering.seed)}</p>
+                      <p className="text-sm font-semibold sm:text-base">{formatCurrency(lastOffering.seed)}</p>
                       <p className="text-xs text-muted-foreground">Seed</p>
                     </div>
                   </div>
@@ -577,23 +673,23 @@ function PastorDashboard({
         </DashboardSection>
 
         <DashboardSection title="Spiritual Care" icon={Heart} tone="rose">
-          <div className="grid grid-cols-3 gap-2 text-center">
-            <div className="rounded-lg bg-highlight/10 p-3">
-              <p className="text-xl font-bold text-highlight">{overview.prayersSummary.pending}</p>
-              <p className="text-xs text-muted-foreground">Pending</p>
+          <div className="grid grid-cols-3 gap-1.5 text-center sm:gap-2">
+            <div className="rounded-lg bg-highlight/10 p-2 sm:p-3">
+              <p className="text-base font-bold text-highlight sm:text-xl">{overview.prayersSummary.pending}</p>
+              <p className="text-[10px] text-muted-foreground sm:text-xs">Pending</p>
             </div>
-            <div className="rounded-lg bg-primary/10 p-3">
-              <p className="text-xl font-bold text-primary">{overview.prayersSummary.prayed}</p>
-              <p className="text-xs text-muted-foreground">Prayed</p>
+            <div className="rounded-lg bg-primary/10 p-2 sm:p-3">
+              <p className="text-base font-bold text-primary sm:text-xl">{overview.prayersSummary.prayed}</p>
+              <p className="text-[10px] text-muted-foreground sm:text-xs">Prayed</p>
             </div>
-            <div className="rounded-lg bg-accent/10 p-3">
-              <p className="text-xl font-bold text-accent">{overview.prayersSummary.answered}</p>
-              <p className="text-xs text-muted-foreground">Answered</p>
+            <div className="rounded-lg bg-accent/10 p-2 sm:p-3">
+              <p className="text-base font-bold text-accent sm:text-xl">{overview.prayersSummary.answered}</p>
+              <p className="text-[10px] text-muted-foreground sm:text-xs">Answered</p>
             </div>
           </div>
           {overview.followUpsByStage.length > 0 && (
             <div className="mt-4 space-y-1.5 border-t border-border pt-3">
-              <p className="text-xs font-medium text-muted-foreground">Discipleship pipeline ({overview.counts.activeFollowUps} total)</p>
+              <p className="text-xs font-medium text-muted-foreground">New believers class ({overview.counts.activeFollowUps} students)</p>
               {overview.followUpsByStage.map((s) => (
                 <div key={s.stage} className="flex justify-between text-sm">
                   <span>{s.stage}</span>
@@ -650,19 +746,12 @@ function PastorDashboard({
         )}
       </div>
 
-      {/* Announcements strip */}
-      {overview.announcements.length > 0 && (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {overview.announcements.map((a) => (
-            <Card key={a.id} className={cn("p-4", a.pinned && "border-primary/30 bg-primary/5")}>
-              <div className="flex items-start gap-2">
-                {a.pinned && <Pin className="mt-0.5 h-4 w-4 shrink-0 text-primary" />}
-                <p className="text-sm font-medium">{a.title}</p>
-              </div>
-            </Card>
-          ))}
-        </div>
-      )}
+      <DashboardAnnouncements
+        items={overview.announcements}
+        cells={cells}
+        fellowships={fellowships}
+        departments={departments}
+      />
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
@@ -759,9 +848,57 @@ function canManageSettings(role: Role) {
   return role === "Senior Pastor" || role === "Admin";
 }
 
+function activeMemberCount(members: Member[]) {
+  return members.filter((m) => m.active).length;
+}
+
+function newMembersThisMonthFromList(members: Member[]) {
+  const now = new Date();
+  const prefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  return members.filter((m) => m.active && m.joinedAt?.startsWith(prefix)).length;
+}
+
+function buildFallbackOverview(
+  role: Role,
+  counts: { members: number; cells: number; fellowships: number; departments: number; newMembersThisMonth: number }
+): DashboardOverview {
+  return {
+    pastoral: isPastoral(role) || role === "Admin",
+    showFinances: canAccessFinances(role),
+    counts: {
+      members: counts.members,
+      cells: counts.cells,
+      fellowships: counts.fellowships,
+      departments: counts.departments,
+      newMembersThisMonth: counts.newMembersThisMonth,
+      pendingPrayers: 0,
+      pendingTasks: 0,
+      overdueTasks: 0,
+      pendingReports: 0,
+      activeFollowUps: 0,
+    },
+    lastService: null,
+    previousService: null,
+    lastServiceNewcomers: { members: [], guests: [], total: 0 },
+    attendanceDelta: null,
+    lastOffering: null,
+    monthFinances: null,
+    cellHealth: { avgAttendance: 0, meetingsThisMonth: 0, topCell: null },
+    serviceTrend: [],
+    fellowshipCellAttendance: [],
+    prayersSummary: { pending: 0, prayed: 0, answered: 0 },
+    tasksDue: [],
+    pendingReports: [],
+    followUpsByStage: [],
+    nextEvent: null,
+    announcements: [],
+    birthdaysThisMonth: null,
+  };
+}
+
 // ─── Dashboard ─────────────────────────────────────────────────────────────────
 
-export function DashboardPage({ members, cells, currentUser }: PageProps) {
+export function DashboardPage({ members, cells, fellowships, departments, currentUser }: PageProps) {
   const pastoral = isPastoral(currentUser.role) || currentUser.role === "Admin";
   const cellScoped = isCellScopedRole(currentUser.role);
   const myCell = cells.find((c) => c.id === currentUser.cellId);
@@ -775,23 +912,104 @@ export function DashboardPage({ members, cells, currentUser }: PageProps) {
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [activities, setActivities] = useState<{ id: string; text: string; time: string }[]>([]);
   const [events, setEvents] = useState<{ id: string; title: string; date: string; time: string; rsvpIds: string[] }[]>([]);
+  const [dashboardAnnouncements, setDashboardAnnouncements] = useState<DashboardAnnouncementItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const hasAnnouncementsPage = PAGE_ACCESS[currentUser.role]?.includes("announcements");
 
   useEffect(() => {
+    let cancelled = false;
+    const bootstrapCounts = {
+      members: activeMemberCount(members),
+      cells: cells.length,
+      fellowships: fellowships.length,
+      departments: departments.length,
+      newMembersThisMonth: newMembersThisMonthFromList(members),
+    };
+
+    const applyBootstrapStats = () => {
+      setStats({
+        members: bootstrapCounts.members,
+        cells: bootstrapCounts.cells,
+        fellowships: bootstrapCounts.fellowships,
+        departments: bootstrapCounts.departments,
+        lastCellMeeting: null,
+      });
+    };
+
     setLoading(true);
-    const requests: Promise<void>[] = [
-      api<typeof activities>("/activities").then(setActivities).catch(() => {}),
-    ];
-    if (pastoral) {
-      requests.push(api<DashboardOverview>("/dashboard/overview").then(setOverview).catch(() => {}));
-    } else {
-      requests.push(api<typeof stats>("/dashboard/stats").then(setStats).catch(() => {}));
-    }
-    if (currentUser.role !== "Cell Member" && currentUser.role !== "Church Member") {
-      requests.push(api<typeof events>("/events").then(setEvents).catch(() => {}));
-    }
-    Promise.all(requests).finally(() => setLoading(false));
-  }, [currentUser.role, pastoral]);
+    (async () => {
+      try {
+        const acts = await api<typeof activities>("/activities");
+        if (!cancelled) setActivities(acts);
+      } catch {
+        /* optional feed */
+      }
+
+      if (pastoral) {
+        try {
+          const ov = await api<DashboardOverview>("/dashboard/overview");
+          if (!cancelled) setOverview(ov);
+        } catch (err) {
+          if (!cancelled) {
+            toast.error(err instanceof Error ? err.message : "Could not load dashboard overview");
+            setOverview(buildFallbackOverview(currentUser.role, bootstrapCounts));
+            applyBootstrapStats();
+            try {
+              const s = await api<typeof stats>("/dashboard/stats");
+              if (!cancelled) {
+                setStats(s);
+                setOverview(
+                  buildFallbackOverview(currentUser.role, {
+                    ...bootstrapCounts,
+                    members: s.members,
+                    cells: s.cells,
+                    fellowships: s.fellowships,
+                    departments: s.departments,
+                  })
+                );
+              }
+            } catch {
+              /* bootstrap counts already applied */
+            }
+          }
+        }
+      } else {
+        try {
+          const s = await api<typeof stats>("/dashboard/stats");
+          if (!cancelled) setStats(s);
+        } catch (err) {
+          if (!cancelled) {
+            toast.error(err instanceof Error ? err.message : "Could not load dashboard stats");
+            applyBootstrapStats();
+          }
+        }
+      }
+
+      if (currentUser.role !== "Cell Member" && currentUser.role !== "Church Member") {
+        try {
+          const ev = await api<typeof events>("/events");
+          if (!cancelled) setEvents(ev);
+        } catch {
+          /* optional */
+        }
+      }
+
+      if (hasAnnouncementsPage && !pastoral) {
+        try {
+          const ann = await api<DashboardAnnouncementItem[]>("/announcements");
+          if (!cancelled) setDashboardAnnouncements(ann.slice(0, 5));
+        } catch {
+          /* optional */
+        }
+      }
+    })().finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser.role, pastoral, hasAnnouncementsPage, members, cells, fellowships, departments]);
 
   return (
     <div className="space-y-6">
@@ -807,10 +1025,25 @@ export function DashboardPage({ members, cells, currentUser }: PageProps) {
       {loading ? (
         <DashboardSkeleton pastoral={pastoral} />
       ) : pastoral && overview ? (
-        <PastorDashboard overview={overview} activities={activities} events={events} />
+        <PastorDashboard
+          overview={overview}
+          activities={activities}
+          events={events}
+          cells={cells}
+          fellowships={fellowships}
+          departments={departments}
+        />
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+          {dashboardAnnouncements.length > 0 && (
+            <DashboardAnnouncements
+              items={dashboardAnnouncements}
+              cells={cells}
+              fellowships={fellowships}
+              departments={departments}
+            />
+          )}
+          <div className={STAT_CARDS_GRID}>
             {cellScoped ? (
               <>
                 <StatCard label="Cell Members" value={stats.members} icon={Users} tone="indigo" sub={myCell?.name} />
@@ -1906,12 +2139,6 @@ export function DepartmentsPage({ members, departments: propDepts, currentUser, 
   );
 }
 
-function attendanceEventLabel(record: AttendanceRecord, cells: Cell[]) {
-  return record.type === "service"
-    ? "Sunday Service"
-    : cells.find((c) => c.id === record.cellId)?.name || "Cell meeting";
-}
-
 function AttendanceMemberLog({
   member,
   records,
@@ -1947,19 +2174,24 @@ function AttendanceMemberLog({
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center gap-3 p-4 text-left transition hover:bg-muted/40"
+        className="flex w-full flex-col gap-3 p-4 text-left transition hover:bg-muted/40 sm:flex-row sm:items-center"
       >
-        <AvatarCircle name={member.name} size="md" />
-        <div className="min-w-0 flex-1">
-          <MemberNameLink members={[member]} id={member.id} />
-          <p className="text-xs text-muted-foreground">{member.role}{member.phone ? ` · ${member.phone}` : ""}</p>
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <AvatarCircle name={member.name} size="md" />
+          <div className="min-w-0 flex-1">
+            <MemberNameLink members={[member]} id={member.id} />
+            <p className="text-xs text-muted-foreground">{member.role}{member.phone ? ` · ${member.phone}` : ""}</p>
+          </div>
+          <Badge color="gray">{log.length} records</Badge>
+          {expanded ? <ChevronUp className="h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />}
         </div>
-        <div className="hidden shrink-0 text-right text-xs sm:block">
-          <p className="font-medium text-emerald-600">{presentCount} present</p>
-          <p className="text-muted-foreground">{absentCount} absent · {rate}%</p>
+        <div className="w-full sm:max-w-[10rem]">
+          <div className="mb-1 flex justify-between text-xs">
+            <span className="font-medium text-emerald-600">{presentCount} present</span>
+            <span className="text-muted-foreground">{rate}%</span>
+          </div>
+          <AttendanceRateBar present={presentCount} absent={absentCount} />
         </div>
-        <Badge color="gray">{log.length} records</Badge>
-        {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
       </button>
       {expanded && (
         <div className="border-t bg-muted/20 px-4 py-3">
@@ -2000,8 +2232,11 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
   const { departmentAbilities } = useAuth();
   const cellScoped = isCellScopedRole(currentUser.role);
   const myCell = cells.find((c) => c.id === currentUser.cellId);
+  const canRecordService =
+    canRecordServiceAttendance(currentUser.role) ||
+    canRecordServiceAttendanceForUser(currentUser.role, departmentAbilities);
   const [pageTab, setPageTab] = useState<"calendar" | "members" | "record">("calendar");
-  const [mode, setMode] = useState<"cell" | "service">("cell");
+  const [mode, setMode] = useState<"cell" | "service">(cellScoped ? "cell" : canRecordService ? "service" : "cell");
   const [trends, setTrends] = useState<{ date: string; cell_name: string; present_count: number }[]>([]);
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -2011,6 +2246,7 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
   const [guestNames, setGuestNames] = useState("");
   const [memberSearch, setMemberSearch] = useState("");
   const [expandedMemberId, setExpandedMemberId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const load = () => api<typeof records>("/attendance").then(setRecords).catch(() => {});
 
@@ -2022,14 +2258,18 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
     if (cellScoped) setMode("cell");
   }, [cellScoped]);
 
-  const trendChart = trends.reduce<Record<string, Record<string, number | string>>>((acc, row) => {
-    const week = row.date?.slice(0, 7) || "week";
-    if (!acc[week]) acc[week] = { week };
-    const key = (row.cell_name || "cell").split(" ")[0];
-    acc[week][key] = row.present_count;
-    return acc;
-  }, {});
-  const trendData = Object.values(trendChart).slice(-6);
+  const { trendData, trendCellKeys } = useMemo(() => {
+    const cellKeys = new Set<string>();
+    const chart = trends.reduce<Record<string, Record<string, number | string>>>((acc, row) => {
+      const week = row.date?.slice(0, 7) || "week";
+      if (!acc[week]) acc[week] = { week };
+      const key = (row.cell_name || "Cell").replace(/\s+/g, " ").trim().slice(0, 12) || "Cell";
+      cellKeys.add(key);
+      acc[week][key] = row.present_count;
+      return acc;
+    }, {});
+    return { trendData: Object.values(chart).slice(-8), trendCellKeys: [...cellKeys].slice(0, 6) };
+  }, [trends]);
 
   const cellMembers = members.filter((m) => m.cellId === cellId && m.active);
   const serviceMembers = members.filter((m) => m.active);
@@ -2059,29 +2299,42 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
   const save = async () => {
     const presentIds = [...present];
     const pool = mode === "cell" ? cellMembers : serviceMembers;
+    if (pool.length === 0) {
+      toast.error(mode === "cell" ? "No members in this cell" : "No active members to record");
+      return;
+    }
     const absentIds = pool.map((m) => m.id).filter((id) => !presentIds.includes(id));
     const guests = guestNames
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean)
       .map((name) => ({ name }));
-    await api("/attendance", {
-      method: "POST",
-      body: JSON.stringify({
-        date,
-        type: mode,
-        cellId: mode === "cell" ? cellId : undefined,
-        presentIds,
-        absentIds,
-        newcomerIds: mode === "service" ? [...newcomers] : [],
-        guests: mode === "service" ? guests : [],
-      }),
-    });
-    setPresent(new Set());
-    setNewcomers(new Set());
-    setGuestNames("");
-    load();
-    onRefresh();
+    setSaving(true);
+    try {
+      await api("/attendance", {
+        method: "POST",
+        body: JSON.stringify({
+          date,
+          type: mode,
+          cellId: mode === "cell" ? cellId : undefined,
+          presentIds,
+          absentIds,
+          newcomerIds: mode === "service" ? [...newcomers] : [],
+          guests: mode === "service" ? guests : [],
+        }),
+      });
+      toast.success("Attendance saved");
+      setPresent(new Set());
+      setNewcomers(new Set());
+      setGuestNames("");
+      setPageTab("calendar");
+      load();
+      onRefresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not save attendance");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const roster = mode === "cell" ? cellMembers : serviceMembers;
@@ -2091,93 +2344,77 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
     .filter((m) => !memberSearch || m.name.toLowerCase().includes(memberSearch.toLowerCase()) || m.role.toLowerCase().includes(memberSearch.toLowerCase()))
     .sort((a, b) => a.name.localeCompare(b.name));
 
+  const canRecord = cellScoped || canRecordService;
+
   return (
     <div className="space-y-6">
       <PageHeader
         {...pageHeaderProps("attendance")}
         title="Attendance"
-        subtitle={cellScoped ? `Cell attendance for ${myCell?.name || "your cell"}` : "View attendance by date, member, or record a new meeting"}
+        subtitle={cellScoped ? `${myCell?.name || "Your cell"} · track meetings and turnout` : "Calendar, member history, and meeting records"}
+        action={
+          canRecord ? (
+            <Btn onClick={() => setPageTab("record")}>
+              <Plus className="h-4 w-4" /> Record
+            </Btn>
+          ) : undefined
+        }
       />
+
+      <AttendanceStatsBar records={records} />
+
       <TabBar
         tabs={[
           { id: "calendar" as const, label: "Calendar" },
-          { id: "members" as const, label: "By Member" },
-          { id: "record" as const, label: "Add New Attendance" },
+          { id: "members" as const, label: "By member" },
+          ...(canRecord ? [{ id: "record" as const, label: "Record" }] : []),
         ]}
         value={pageTab}
         onChange={setPageTab}
       />
 
-      {pageTab === "record" && (
-        <>
-      {(canRecordServiceAttendance(currentUser.role) ||
-        canRecordServiceAttendanceForUser(currentUser.role, departmentAbilities)) && (
-        <TabBar
-          tabs={[
-            { id: "cell" as const, label: "Cell Meeting" },
-            { id: "service" as const, label: "Sunday Service" },
-          ]}
-          value={mode}
-          onChange={setMode}
-        />
-      )}
-      <Card>
-        <h2 className="mb-4 font-semibold">{mode === "cell" ? "Record Cell Attendance" : "Record Service Attendance"}</h2>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Input label="Date" type="date" value={date} onChange={setDate} />
-          {mode === "cell" && !cellScoped && (
-            <Select label="Cell" value={cellId} onChange={setCellId} options={cells.map((c) => ({ value: c.id, label: c.name }))} />
-          )}
-          {mode === "cell" && cellScoped && myCell && (
-            <Input label="Cell" value={myCell.name} disabled onChange={() => {}} />
+      {pageTab === "record" && canRecord && (
+        <div className="space-y-6">
+          <AttendanceRecordPanel
+            mode={mode}
+            date={date}
+            onDateChange={setDate}
+            cellId={cellId}
+            onCellIdChange={setCellId}
+            cells={cells}
+            myCellName={myCell?.name}
+            cellScoped={cellScoped}
+            roster={roster}
+            present={present}
+            onTogglePresent={togglePresent}
+            newcomers={newcomers}
+            onToggleNewcomer={toggleNewcomer}
+            guestNames={guestNames}
+            onGuestNamesChange={setGuestNames}
+            onSave={save}
+            saving={saving}
+            canSwitchMode={canRecordService && !cellScoped}
+            onModeChange={setMode}
+          />
+          {trendData.length > 0 && trendCellKeys.length > 0 && (
+            <Card className="p-4 sm:p-5">
+              <h2 className="mb-1 font-semibold">Cell attendance trends</h2>
+              <p className="mb-4 text-sm text-muted-foreground">Weekly present counts by cell (last 60 days)</p>
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={trendData}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                  <XAxis dataKey="week" tick={{ fontSize: 11 }} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Legend />
+                  {trendCellKeys.map((key, i) => (
+                    <Bar key={key} dataKey={key} fill={CHART_COLORS[i % CHART_COLORS.length]} radius={[4, 4, 0, 0]} />
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
           )}
         </div>
-        <div className="mt-4 space-y-2">
-          {roster.map((m) => (
-            <div key={m.id} className="flex items-center gap-2 rounded-lg border p-3 hover:bg-muted/50">
-              <label className="flex flex-1 cursor-pointer items-center gap-3">
-                <input type="checkbox" checked={present.has(m.id)} onChange={() => togglePresent(m.id)} />
-                <span>{m.name}</span>
-              </label>
-              {mode === "service" && present.has(m.id) && (
-                <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-                  <input type="checkbox" checked={newcomers.has(m.id)} onChange={() => toggleNewcomer(m.id)} />
-                  New
-                </label>
-              )}
-            </div>
-          ))}
-        </div>
-        {mode === "service" && (
-          <div className="mt-4">
-            <Textarea
-              label="First-time guests (one name per line)"
-              value={guestNames}
-              onChange={setGuestNames}
-              rows={3}
-            />
-          </div>
-        )}
-        <Btn className="mt-4" onClick={save}>Save Attendance</Btn>
-      </Card>
-      {trendData.length > 0 && (
-        <Card>
-          <h2 className="mb-4 font-semibold">Attendance Trends</h2>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={trendData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="week" />
-              <YAxis />
-              <Tooltip />
-              <Legend />
-              <Bar dataKey="Grace" fill={CHART_COLORS[0]} />
-              <Bar dataKey="Victory" fill={CHART_COLORS[1]} />
-              <Bar dataKey="Faith" fill={CHART_COLORS[2]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </Card>
-      )}
-        </>
       )}
 
       {pageTab === "calendar" && (
@@ -2198,12 +2435,17 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
             <input
               value={memberSearch}
               onChange={(e) => setMemberSearch(e.target.value)}
-              placeholder="Search members..."
-              className="w-full min-h-[44px] rounded-lg border border-input py-2 pl-10 pr-3 text-base sm:text-sm"
+              placeholder="Search by name or role…"
+              className="w-full min-h-[44px] rounded-xl border border-input bg-background py-2 pl-10 pr-3 text-base shadow-sm sm:text-sm"
             />
           </div>
+          <p className="text-sm text-muted-foreground">
+            {filteredMembers.length} member{filteredMembers.length === 1 ? "" : "s"} · expand for attendance history
+          </p>
           {filteredMembers.length === 0 ? (
-            <Card><p className="text-sm text-muted-foreground">No members match your search.</p></Card>
+            <Card className="p-6 text-center">
+              <p className="text-sm text-muted-foreground">No members match your search.</p>
+            </Card>
           ) : (
             filteredMembers.map((m) => (
               <AttendanceMemberLog
@@ -2773,6 +3015,7 @@ interface AdminUser {
 }
 
 export function SettingsPage({ members, settings: propSettings, currentUser, onRefresh, userAccount }: PageProps & { userAccount?: { email: string } }) {
+  const { syncBranding } = useAuth();
   const [settings, setSettings] = useState(propSettings);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [userForm, setUserForm] = useState({ email: "", password: "", memberId: "", accessLevel: "standard" });
@@ -2793,7 +3036,17 @@ export function SettingsPage({ members, settings: propSettings, currentUser, onR
   const saveSettings = async () => {
     setSaving(true);
     try {
-      await api("/settings", { method: "PUT", body: JSON.stringify(settings) });
+      const res = await api<{ branding: { name: string; tagline?: string; logoUrl?: string | null } }>("/settings", {
+        method: "PUT",
+        body: JSON.stringify(settings),
+      });
+      if (res.branding) {
+        syncBranding({
+          name: res.branding.name,
+          tagline: res.branding.tagline,
+          logoUrl: res.branding.logoUrl || undefined,
+        });
+      }
       onRefresh();
     } finally {
       setSaving(false);
@@ -2826,8 +3079,18 @@ export function SettingsPage({ members, settings: propSettings, currentUser, onR
     if (!logoFile) return;
     const fd = new FormData();
     fd.append("logo", logoFile);
-    const res = await api<{ logoUrl: string }>("/settings/logo", { method: "POST", body: fd });
+    const res = await api<{ logoUrl: string; branding?: { name: string; tagline?: string; logoUrl?: string | null } }>(
+      "/settings/logo",
+      { method: "POST", body: fd }
+    );
     setSettings((s) => ({ ...s, logoUrl: res.logoUrl }));
+    if (res.branding) {
+      syncBranding({
+        name: res.branding.name,
+        tagline: res.branding.tagline,
+        logoUrl: res.branding.logoUrl || undefined,
+      });
+    }
     onRefresh();
   };
 
@@ -2979,8 +3242,29 @@ const PURPOSE_LABELS: Record<ExpensePurpose, string> = {
   other: "Other",
 };
 
+function financeMonthStart(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+function financeToday() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function isFinanceDateInRange(date: string, from: string, to: string) {
+  if (from && date < from) return false;
+  if (to && date > to) return false;
+  return true;
+}
+
+type FinanceRangePreset = "month" | "lastMonth" | "year" | "all";
+
 export function FinancesPage({ members, currentUser }: PageProps) {
   const [records, setRecords] = useState<FinanceRecord[]>([]);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [incomeModalOpen, setIncomeModalOpen] = useState(false);
+  const [expenseModalOpen, setExpenseModalOpen] = useState(false);
+  const [exportFrom, setExportFrom] = useState(financeMonthStart);
+  const [exportTo, setExportTo] = useState(financeToday);
   const [tithes, setTithes] = useState<{ memberId: string | null; memberName: string; total: number; records: FinanceRecord[] }[]>([]);
   const [contexts, setContexts] = useState<{
     services: { id: string; date: string; label: string }[];
@@ -3023,9 +3307,77 @@ export function FinancesPage({ members, currentUser }: PageProps) {
     return <Card><p className="text-muted-foreground">You do not have access to finances.</p></Card>;
   }
 
+  const applyExportPreset = (preset: FinanceRangePreset) => {
+    const now = new Date();
+    if (preset === "all") {
+      setExportFrom("");
+      setExportTo("");
+      return;
+    }
+    if (preset === "year") {
+      setExportFrom(`${now.getFullYear()}-01-01`);
+      setExportTo(financeToday());
+      return;
+    }
+    if (preset === "lastMonth") {
+      const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const end = new Date(now.getFullYear(), now.getMonth(), 0);
+      setExportFrom(financeMonthStart(start));
+      setExportTo(end.toISOString().slice(0, 10));
+      return;
+    }
+    setExportFrom(financeMonthStart(now));
+    setExportTo(financeToday());
+  };
+
+  const openExportModal = () => {
+    setExportFrom(financeMonthStart());
+    setExportTo(financeToday());
+    setExportModalOpen(true);
+  };
+
+  const exportPreview = useMemo(
+    () => records.filter((f) => isFinanceDateInRange(f.date, exportFrom, exportTo)),
+    [records, exportFrom, exportTo]
+  );
+
+  const exportPreviewIncome = exportPreview
+    .filter((f) => f.type === "income")
+    .reduce((s, f) => s + f.amount, 0);
+  const exportPreviewExpenses = exportPreview
+    .filter((f) => f.type === "expense")
+    .reduce((s, f) => s + f.amount, 0);
+
   const income = records.filter((f) => f.type === "income").reduce((s, f) => s + f.amount, 0);
   const expenses = records.filter((f) => f.type === "expense").reduce((s, f) => s + f.amount, 0);
   const expenseRecords = records.filter((f) => f.type === "expense");
+
+  const confirmExport = () => {
+    if (exportFrom && exportTo && exportFrom > exportTo) {
+      toast.error("From date must be on or before To date");
+      return;
+    }
+    if (exportPreview.length === 0) {
+      toast.error("No transactions in the selected date range");
+      return;
+    }
+    const slug = exportFrom && exportTo ? `${exportFrom}_to_${exportTo}` : "all-time";
+    exportCSV(
+      `finances-${slug}.csv`,
+      ["Date", "Type", "Category", "Amount", "Member", "Purpose", "Description"],
+      exportPreview.map((f) => [
+        f.date,
+        f.type,
+        f.category,
+        String(f.amount),
+        f.memberId ? memberName(members, f.memberId) : "",
+        f.purposeDisplay || "",
+        f.description || "",
+      ])
+    );
+    toast.success(`Exported ${exportPreview.length} transactions`);
+    setExportModalOpen(false);
+  };
 
   const resolvePurposeLabel = () => {
     const { purposeType, purposeId, purposeLabel } = expenseForm;
@@ -3058,6 +3410,8 @@ export function FinancesPage({ members, currentUser }: PageProps) {
       }),
     });
     setIncomeForm({ category: "Tithe", amount: "", description: "", memberId: "", date: new Date().toISOString().slice(0, 10) });
+    setIncomeModalOpen(false);
+    toast.success("Income recorded");
     load();
   };
 
@@ -3086,6 +3440,8 @@ export function FinancesPage({ members, currentUser }: PageProps) {
       purposeId: contexts.services[0]?.id || "",
       purposeLabel: "",
     });
+    setExpenseModalOpen(false);
+    toast.success("Expense recorded");
     load();
   };
 
@@ -3103,20 +3459,24 @@ export function FinancesPage({ members, currentUser }: PageProps) {
         title="Finances"
         subtitle="Income, expenses, and reporting"
         action={
-          <Btn
-            variant="accent"
-            onClick={() =>
-              exportCSV(
-                "finances.csv",
-                ["Date", "Type", "Category", "Amount", "Purpose", "Description"],
-                records.map((f) => [f.date, f.type, f.category, String(f.amount), f.purposeDisplay || "", f.description || ""])
-              )
-            }
-          >
-            <Download className="h-4 w-4" /> Export
-          </Btn>
+          <div className="flex w-full flex-row flex-nowrap gap-2 sm:w-auto [&_button]:min-w-0 [&_button]:flex-1 sm:[&_button]:flex-none">
+            {tab === "ledger" && (
+              <Btn onClick={() => setIncomeModalOpen(true)}>
+                <Plus className="h-4 w-4 shrink-0" /> <span className="truncate">Record Income</span>
+              </Btn>
+            )}
+            {tab === "expenses" && (
+              <Btn variant="highlight" onClick={() => setExpenseModalOpen(true)}>
+                <Plus className="h-4 w-4 shrink-0" /> <span className="truncate">Record Expense</span>
+              </Btn>
+            )}
+            <Btn variant="accent" onClick={openExportModal}>
+              <Download className="h-4 w-4 shrink-0" /> <span className="truncate">Export</span>
+            </Btn>
+          </div>
         }
       />
+
       <TabBar
         tabs={[
           { id: "ledger" as const, label: "Tithe Ledger" },
@@ -3126,7 +3486,7 @@ export function FinancesPage({ members, currentUser }: PageProps) {
         value={tab}
         onChange={setTab}
       />
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
+      <div className="grid grid-cols-1 gap-3 min-[400px]:grid-cols-2 sm:grid-cols-3 sm:gap-4 [&>*]:min-w-0">
         <StatCard label="Total Income" value={formatCurrency(income)} icon={Wallet} tone="emerald" />
         <StatCard label="Total Expenses" value={formatCurrency(expenses)} icon={Wallet} tone="rose" />
         <StatCard label="Balance" value={formatCurrency(income - expenses)} icon={Wallet} tone="blue" />
@@ -3134,17 +3494,6 @@ export function FinancesPage({ members, currentUser }: PageProps) {
 
       {tab === "ledger" && (
         <>
-          <Card>
-            <h2 className="mb-4 font-semibold">Record Income</h2>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Input label="Date" type="date" value={incomeForm.date} onChange={(v) => setIncomeForm((f) => ({ ...f, date: v }))} />
-              <Select label="Category" value={incomeForm.category} onChange={(v) => setIncomeForm((f) => ({ ...f, category: v }))} options={INCOME_CATEGORIES.map((c) => ({ value: c, label: c }))} />
-              <Select label="Member (for tithe/offering)" value={incomeForm.memberId} onChange={(v) => setIncomeForm((f) => ({ ...f, memberId: v }))} options={[{ value: "", label: "General / Anonymous" }, ...members.map((m) => ({ value: m.id, label: m.name }))]} />
-              <Input label={`Amount (${CURRENCY_SYMBOL})`} value={incomeForm.amount} onChange={(v) => setIncomeForm((f) => ({ ...f, amount: v }))} />
-              <Input label="Description" value={incomeForm.description} onChange={(v) => setIncomeForm((f) => ({ ...f, description: v }))} className="sm:col-span-2" />
-            </div>
-            <Btn className="mt-4" onClick={saveIncome}>Save Income</Btn>
-          </Card>
           <Card>
             <h2 className="mb-4 font-semibold">Member Tithe & Offering Ledger</h2>
             {tithes.map((t) => (
@@ -3166,70 +3515,6 @@ export function FinancesPage({ members, currentUser }: PageProps) {
 
       {tab === "expenses" && (
         <>
-          <Card>
-            <h2 className="mb-4 font-semibold">Record Expense</h2>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Input label="Date" type="date" value={expenseForm.date} onChange={(v) => setExpenseForm((f) => ({ ...f, date: v }))} />
-              <Select
-                label="Linked to"
-                value={expenseForm.purposeType}
-                onChange={(v) =>
-                  setExpenseForm((f) => ({
-                    ...f,
-                    purposeType: v as ExpensePurpose,
-                    purposeId: "",
-                    purposeLabel: "",
-                  }))
-                }
-                options={Object.entries(PURPOSE_LABELS).map(([value, label]) => ({ value, label }))}
-              />
-              {expenseForm.purposeType === "service" && (
-                <Select
-                  label="Service"
-                  value={expenseForm.purposeId}
-                  onChange={(v) => setExpenseForm((f) => ({ ...f, purposeId: v }))}
-                  options={
-                    contexts.services.length
-                      ? contexts.services.map((s) => ({ value: s.id, label: s.label }))
-                      : [{ value: "", label: "No service records — record attendance first" }]
-                  }
-                />
-              )}
-              {expenseForm.purposeType === "event" && (
-                <Select
-                  label="Event"
-                  value={expenseForm.purposeId}
-                  onChange={(v) => setExpenseForm((f) => ({ ...f, purposeId: v }))}
-                  options={
-                    contexts.events.length
-                      ? contexts.events.map((e) => ({ value: e.id, label: e.label }))
-                      : [{ value: "", label: "No events yet" }]
-                  }
-                />
-              )}
-              {expenseForm.purposeType === "cell" && (
-                <Select
-                  label="Cell"
-                  value={expenseForm.purposeId}
-                  onChange={(v) => setExpenseForm((f) => ({ ...f, purposeId: v }))}
-                  options={contexts.cells.map((c) => ({ value: c.id, label: c.label }))}
-                />
-              )}
-              {(expenseForm.purposeType === "outreach" || expenseForm.purposeType === "general" || expenseForm.purposeType === "other") && (
-                <Input
-                  label="Purpose label"
-                  value={expenseForm.purposeLabel}
-                  onChange={(v) => setExpenseForm((f) => ({ ...f, purposeLabel: v }))}
-                  placeholder={expenseForm.purposeType === "outreach" ? "e.g. Street evangelism" : "e.g. Office supplies"}
-                />
-              )}
-              <Select label="Category" value={expenseForm.category} onChange={(v) => setExpenseForm((f) => ({ ...f, category: v }))} options={EXPENSE_CATEGORIES.map((c) => ({ value: c, label: c }))} />
-              <Input label={`Amount (${CURRENCY_SYMBOL})`} value={expenseForm.amount} onChange={(v) => setExpenseForm((f) => ({ ...f, amount: v }))} />
-              <Input label="Description" value={expenseForm.description} onChange={(v) => setExpenseForm((f) => ({ ...f, description: v }))} className="sm:col-span-2" />
-            </div>
-            <Btn className="mt-4" variant="highlight" onClick={saveExpense}>Save Expense</Btn>
-          </Card>
-
           <Card>
             <h2 className="mb-4 font-semibold">Expense Records</h2>
             {expenseRecords.length === 0 ? (
@@ -3286,7 +3571,9 @@ export function FinancesPage({ members, currentUser }: PageProps) {
                 </div>
               </Card>
             ))}
-            {records.length === 0 && <Card><p className="text-sm text-muted-foreground">No transactions yet</p></Card>}
+            {records.length === 0 && (
+              <Card><p className="text-sm text-muted-foreground">No transactions yet</p></Card>
+            )}
           </div>
           <Card className="hidden overflow-x-auto p-0 md:block">
             <table className="w-full text-sm">
@@ -3314,6 +3601,122 @@ export function FinancesPage({ members, currentUser }: PageProps) {
           </Card>
         </>
       )}
+
+      <Modal open={incomeModalOpen} onClose={() => setIncomeModalOpen(false)} title="Record Income" size="sm">
+        <div className="space-y-3">
+          <Input label="Date" type="date" value={incomeForm.date} onChange={(v) => setIncomeForm((f) => ({ ...f, date: v }))} />
+          <Select label="Category" value={incomeForm.category} onChange={(v) => setIncomeForm((f) => ({ ...f, category: v }))} options={INCOME_CATEGORIES.map((c) => ({ value: c, label: c }))} />
+          <Select label="Member (for tithe/offering)" value={incomeForm.memberId} onChange={(v) => setIncomeForm((f) => ({ ...f, memberId: v }))} options={[{ value: "", label: "General / Anonymous" }, ...members.map((m) => ({ value: m.id, label: m.name }))]} />
+          <Input label={`Amount (${CURRENCY_SYMBOL})`} value={incomeForm.amount} onChange={(v) => setIncomeForm((f) => ({ ...f, amount: v }))} />
+          <Input label="Description" value={incomeForm.description} onChange={(v) => setIncomeForm((f) => ({ ...f, description: v }))} />
+          <ModalFooter>
+            <Btn variant="ghost" className="!flex-1" onClick={() => setIncomeModalOpen(false)}>Cancel</Btn>
+            <Btn className="!flex-1" onClick={saveIncome}>Save</Btn>
+          </ModalFooter>
+        </div>
+      </Modal>
+
+      <Modal open={expenseModalOpen} onClose={() => setExpenseModalOpen(false)} title="Record Expense" size="sm">
+        <div className="space-y-3">
+          <Input label="Date" type="date" value={expenseForm.date} onChange={(v) => setExpenseForm((f) => ({ ...f, date: v }))} />
+          <Select
+            label="Linked to"
+            value={expenseForm.purposeType}
+            onChange={(v) =>
+              setExpenseForm((f) => ({
+                ...f,
+                purposeType: v as ExpensePurpose,
+                purposeId: "",
+                purposeLabel: "",
+              }))
+            }
+            options={Object.entries(PURPOSE_LABELS).map(([value, label]) => ({ value, label }))}
+          />
+          {expenseForm.purposeType === "service" && (
+            <Select
+              label="Service"
+              value={expenseForm.purposeId}
+              onChange={(v) => setExpenseForm((f) => ({ ...f, purposeId: v }))}
+              options={
+                contexts.services.length
+                  ? contexts.services.map((s) => ({ value: s.id, label: s.label }))
+                  : [{ value: "", label: "No service records — record attendance first" }]
+              }
+            />
+          )}
+          {expenseForm.purposeType === "event" && (
+            <Select
+              label="Event"
+              value={expenseForm.purposeId}
+              onChange={(v) => setExpenseForm((f) => ({ ...f, purposeId: v }))}
+              options={
+                contexts.events.length
+                  ? contexts.events.map((e) => ({ value: e.id, label: e.label }))
+                  : [{ value: "", label: "No events yet" }]
+              }
+            />
+          )}
+          {expenseForm.purposeType === "cell" && (
+            <Select
+              label="Cell"
+              value={expenseForm.purposeId}
+              onChange={(v) => setExpenseForm((f) => ({ ...f, purposeId: v }))}
+              options={contexts.cells.map((c) => ({ value: c.id, label: c.label }))}
+            />
+          )}
+          {(expenseForm.purposeType === "outreach" || expenseForm.purposeType === "general" || expenseForm.purposeType === "other") && (
+            <Input
+              label="Purpose label"
+              value={expenseForm.purposeLabel}
+              onChange={(v) => setExpenseForm((f) => ({ ...f, purposeLabel: v }))}
+              placeholder={expenseForm.purposeType === "outreach" ? "e.g. Street evangelism" : "e.g. Office supplies"}
+            />
+          )}
+          <Select label="Category" value={expenseForm.category} onChange={(v) => setExpenseForm((f) => ({ ...f, category: v }))} options={EXPENSE_CATEGORIES.map((c) => ({ value: c, label: c }))} />
+          <Input label={`Amount (${CURRENCY_SYMBOL})`} value={expenseForm.amount} onChange={(v) => setExpenseForm((f) => ({ ...f, amount: v }))} />
+          <Input label="Description" value={expenseForm.description} onChange={(v) => setExpenseForm((f) => ({ ...f, description: v }))} />
+          <ModalFooter>
+            <Btn variant="ghost" className="!flex-1" onClick={() => setExpenseModalOpen(false)}>Cancel</Btn>
+            <Btn variant="highlight" className="!flex-1" onClick={saveExpense}>Save</Btn>
+          </ModalFooter>
+        </div>
+      </Modal>
+
+      <Modal open={exportModalOpen} onClose={() => setExportModalOpen(false)} title="Export finances" size="sm">
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">Choose a date range for the CSV export.</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Input label="From" type="date" value={exportFrom} onChange={setExportFrom} />
+            <Input label="To" type="date" value={exportTo} onChange={setExportTo} />
+          </div>
+          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+            {(
+              [
+                ["month", "This month"],
+                ["lastMonth", "Last month"],
+                ["year", "This year"],
+                ["all", "All time"],
+              ] as const
+            ).map(([preset, label]) => (
+              <Btn key={preset} variant="ghost" className="!min-h-9 w-full !px-2 !py-1.5 text-xs" onClick={() => applyExportPreset(preset)}>
+                {label}
+              </Btn>
+            ))}
+          </div>
+          <p className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">{exportPreview.length}</span> transaction
+            {exportPreview.length === 1 ? "" : "s"} · Net {formatCurrency(exportPreviewIncome - exportPreviewExpenses)}
+          </p>
+          <ModalFooter>
+            <Btn variant="ghost" className="!flex-1" onClick={() => setExportModalOpen(false)}>
+              Cancel
+            </Btn>
+            <Btn variant="accent" className="!flex-1" onClick={confirmExport}>
+              <Download className="h-4 w-4 shrink-0" /> Export
+            </Btn>
+          </ModalFooter>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -3329,96 +3732,287 @@ interface PrayerRequest {
   status: "pending" | "prayed" | "answered";
   createdAt: string;
   response?: string;
+  isMine?: boolean;
 }
+
+type PrayerFilter = "all" | "mine" | "public" | "team";
 
 export function PrayerPage({ members, currentUser }: PageProps) {
   const { departmentAbilities } = useAuth();
   const [prayers, setPrayers] = useState<PrayerRequest[]>([]);
-  const [form, setForm] = useState({ title: "", content: "", isPrivate: false });
+  const [form, setForm] = useState({ title: "", content: "", visibility: "public" as "public" | "team" });
+  const [filter, setFilter] = useState<PrayerFilter>("all");
+  const [submitting, setSubmitting] = useState(false);
+  const [respondingId, setRespondingId] = useState<string | null>(null);
 
-  const load = () => api<PrayerRequest[]>("/prayers").then(setPrayers).catch(() => {});
+  const viewPrivate = canViewPrivatePrayers(currentUser.role, departmentAbilities);
+  const canRespond = canManagePrayerForUser(currentUser.role, departmentAbilities);
+
+  const load = () =>
+    api<PrayerRequest[]>("/prayers")
+      .then(setPrayers)
+      .catch(() => toast.error("Could not load prayer requests"));
 
   useEffect(() => { load(); }, []);
 
+  const filteredPrayers = useMemo(() => {
+    switch (filter) {
+      case "mine":
+        return prayers.filter((p) => p.isMine || p.memberId === currentUser.id);
+      case "public":
+        return prayers.filter((p) => !p.isPrivate);
+      case "team":
+        return prayers.filter((p) => p.isPrivate);
+      default:
+        return prayers;
+    }
+  }, [prayers, filter, currentUser.id]);
+
   const submit = async () => {
-    if (!form.title || !form.content) return;
-    await api("/prayers", { method: "POST", body: JSON.stringify(form) });
-    setForm({ title: "", content: "", isPrivate: false });
-    load();
+    if (!form.title.trim() || !form.content.trim()) {
+      toast.error("Title and prayer request are required");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await api("/prayers", {
+        method: "POST",
+        body: JSON.stringify({
+          title: form.title.trim(),
+          content: form.content.trim(),
+          isPrivate: form.visibility === "team",
+        }),
+      });
+      toast.success(
+        form.visibility === "team"
+          ? "Request sent to the prayer & intercession team"
+          : "Request shared with the church"
+      );
+      setForm({ title: "", content: "", visibility: "public" });
+      load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to submit request");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const updateStatus = async (id: string, status: PrayerRequest["status"], response?: string) => {
-    await api(`/prayers/${id}`, { method: "PATCH", body: JSON.stringify({ status, response }) });
-    load();
+    setRespondingId(id);
+    try {
+      await api(`/prayers/${id}`, { method: "PATCH", body: JSON.stringify({ status, response }) });
+      toast.success(status === "answered" ? "Marked as answered" : "Marked as prayed for");
+      load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update request");
+    } finally {
+      setRespondingId(null);
+    }
   };
 
-  const canRespond = canManagePrayerForUser(currentUser.role, departmentAbilities);
+  const filterTabs: { id: PrayerFilter; label: string }[] = [
+    { id: "all", label: "All visible" },
+    { id: "mine", label: "My requests" },
+    { id: "public", label: "Church wall" },
+    ...(viewPrivate ? [{ id: "team" as const, label: "Team only" }] : []),
+  ];
 
   return (
     <div className="space-y-6">
-      <PageHeader {...pageHeaderProps("prayer")} title="Prayer Requests" subtitle="Submit and track prayer needs" />
+      <PageHeader
+        {...pageHeaderProps("prayer")}
+        title="Prayer Requests"
+        subtitle="Share needs with the church or send privately to the prayer & intercession team"
+      />
+
       <Card>
-        <h2 className="mb-4 font-semibold">Submit Request</h2>
-        <div className="space-y-3">
-          <Input label="Title" value={form.title} onChange={(v) => setForm((p) => ({ ...p, title: v }))} />
-          <Textarea label="Request" value={form.content} onChange={(v) => setForm((p) => ({ ...p, content: v }))} />
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={form.isPrivate} onChange={(e) => setForm((p) => ({ ...p, isPrivate: e.target.checked }))} />
-            Private (visible to prayer team only)
-          </label>
-          <Btn onClick={submit}>Submit</Btn>
+        <h2 className="mb-1 font-semibold">Submit a prayer request</h2>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Every member can submit requests. Choose who can see your need.
+        </p>
+        <div className="space-y-4">
+          <Input label="Title" value={form.title} onChange={(v) => setForm((p) => ({ ...p, title: v }))} placeholder="Brief title" />
+          <Textarea
+            label="Prayer need"
+            value={form.content}
+            onChange={(v) => setForm((p) => ({ ...p, content: v }))}
+            placeholder="Describe what you would like prayer for…"
+          />
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Who can see this?</p>
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3 has-[:checked]:border-primary/40 has-[:checked]:bg-primary/5">
+              <input
+                type="radio"
+                name="prayer-visibility"
+                className="mt-1"
+                checked={form.visibility === "public"}
+                onChange={() => setForm((p) => ({ ...p, visibility: "public" }))}
+              />
+              <div>
+                <span className="flex items-center gap-1.5 font-medium">
+                  <Eye className="h-4 w-4 text-teal" /> Everyone in the church
+                </span>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Visible on the church prayer wall; any member with access to this page can read it.
+                </p>
+              </div>
+            </label>
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3 has-[:checked]:border-primary/40 has-[:checked]:bg-primary/5">
+              <input
+                type="radio"
+                name="prayer-visibility"
+                className="mt-1"
+                checked={form.visibility === "team"}
+                onChange={() => setForm((p) => ({ ...p, visibility: "team" }))}
+              />
+              <div>
+                <span className="flex items-center gap-1.5 font-medium">
+                  <EyeOff className="h-4 w-4 text-violet" /> Prayer team, pastors & admin only
+                </span>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Sent to the prayer & intercession team plus pastors and administrators. Other members will not see it.
+                </p>
+              </div>
+            </label>
+          </div>
+          <Btn onClick={submit} disabled={submitting}>
+            {submitting ? "Submitting…" : "Submit request"}
+          </Btn>
         </div>
       </Card>
-      {prayers.map((p) => (
-        <Card key={p.id}>
-          <div className="flex flex-wrap justify-between gap-2">
-            <div>
-              <h3 className="font-semibold">
-                {p.title} {p.isPrivate ? <EyeOff className="inline h-4 w-4 text-muted-foreground" /> : <Eye className="inline h-4 w-4" />}
-              </h3>
-              <p className="text-sm text-muted-foreground">{memberName(members, p.memberId)} · {p.createdAt}</p>
-              <p className="mt-2">{p.content}</p>
-              {p.response && <p className="mt-2 text-sm text-accent">Response: {p.response}</p>}
-            </div>
-            {canRespond && (
-              <div className="flex gap-2">
-                <Btn variant="accent" onClick={() => updateStatus(p.id, "prayed", "Prayed for in intercession.")}>Mark Prayed</Btn>
-                <Btn onClick={() => updateStatus(p.id, "answered")}>Answered</Btn>
-              </div>
-            )}
-          </div>
-          <Badge color={p.status === "pending" ? "coral" : p.status === "prayed" ? "teal" : "purple"} className="mt-2">{p.status}</Badge>
-        </Card>
-      ))}
+
+      <div className="space-y-3">
+        <TabBar tabs={filterTabs} value={filter} onChange={setFilter} />
+        {filteredPrayers.length === 0 ? (
+          <Card className="p-8 text-center text-sm text-muted-foreground">
+            No prayer requests in this view yet.
+          </Card>
+        ) : (
+          filteredPrayers.map((p) => {
+            const isMine = p.isMine || p.memberId === currentUser.id;
+            return (
+              <Card key={p.id}>
+                <div className="flex flex-wrap justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-semibold">{p.title}</h3>
+                      {p.isPrivate ? (
+                        <Badge color="violet">Team only</Badge>
+                      ) : (
+                        <Badge color="teal">Church wall</Badge>
+                      )}
+                      {isMine && <Badge color="gray">Your request</Badge>}
+                      <Badge color={p.status === "pending" ? "coral" : p.status === "prayed" ? "sky" : "emerald"}>
+                        {p.status}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {isMine ? "You" : memberName(members, p.memberId)} · {p.createdAt?.slice(0, 10) || p.createdAt}
+                    </p>
+                    <p className="mt-2 whitespace-pre-wrap text-sm">{p.content}</p>
+                    {p.response && (
+                      <p className="mt-3 rounded-lg bg-accent/10 px-3 py-2 text-sm">
+                        <span className="font-medium text-accent">Team response: </span>
+                        {p.response}
+                      </p>
+                    )}
+                  </div>
+                  {canRespond && (
+                    <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+                      <Btn
+                        variant="accent"
+                        disabled={respondingId === p.id || p.status !== "pending"}
+                        onClick={() => updateStatus(p.id, "prayed", "Prayed for in intercession.")}
+                      >
+                        Mark prayed
+                      </Btn>
+                      <Btn
+                        variant="secondary"
+                        disabled={respondingId === p.id}
+                        onClick={() => updateStatus(p.id, "answered", p.response || "Prayer answered.")}
+                      >
+                        Answered
+                      </Btn>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            );
+          })
+        )}
+      </div>
+
+      {viewPrivate && !canRespond && (
+        <p className="text-center text-xs text-muted-foreground">
+          You can view team-only requests. A team leader with respond permission can update status.
+        </p>
+      )}
     </div>
   );
 }
 
-// ─── Discipleship ──────────────────────────────────────────────────────────────
+// ─── Discipleship class ────────────────────────────────────────────────────────
 
-interface FollowUp {
+const DISCIPLESHIP_STAGES = ["Invitee", "New Convert", "In Training", "Graduated"] as const;
+type DiscipleshipStage = (typeof DISCIPLESHIP_STAGES)[number];
+
+interface ClassStudent {
   id: string;
   name: string;
   contact: string;
   memberId?: string | null;
-  stage: "Visitor" | "New Convert" | "Cell Member" | "Worker";
+  stage: DiscipleshipStage;
   assignedToId: string | null;
-  notes: { date: string; text: string; outcome: string }[];
+  enrolledById?: string | null;
+  notes: { id: string; date: string; text: string; outcome: string; createdById?: string }[];
   createdAt: string;
+}
+
+function stageBadgeColor(stage: DiscipleshipStage): "sky" | "emerald" | "purple" | "teal" {
+  if (stage === "Invitee") return "sky";
+  if (stage === "New Convert") return "emerald";
+  if (stage === "In Training") return "purple";
+  return "teal";
 }
 
 export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps) {
   const { departmentAbilities } = useAuth();
-  const canManageFu = canManageDiscipleshipForUser(currentUser.role, departmentAbilities);
-  const [followUps, setFollowUps] = useState<FollowUp[]>([]);
-  const [addModal, setAddModal] = useState(false);
-  const [noteModal, setNoteModal] = useState<string | null>(null);
-  const [newFu, setNewFu] = useState({ memberId: "", stage: "Visitor" as FollowUp["stage"] });
+  const canManageClass = canManageDiscipleshipForUser(currentUser.role, departmentAbilities);
+  const canAssignMentor = canAssignDiscipleshipMentor(currentUser.role);
+  const viewAllClass = canViewAllDiscipleshipClass(currentUser.role, departmentAbilities);
+  const [students, setStudents] = useState<ClassStudent[]>([]);
+  const [enrollModal, setEnrollModal] = useState(false);
+  const [sessionModal, setSessionModal] = useState<{ studentId: string; noteId?: string } | null>(null);
+  const [deleteSessionTarget, setDeleteSessionTarget] = useState<{
+    studentId: string;
+    noteId: string;
+    preview: string;
+  } | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<ClassStudent | null>(null);
+  const [enrollType, setEnrollType] = useState<"member" | "guest">("member");
+  const [enrollForm, setEnrollForm] = useState({
+    memberId: "",
+    guestName: "",
+    guestContact: "",
+    stage: "Invitee" as DiscipleshipStage,
+    mentorId: "",
+  });
   const [memberSearch, setMemberSearch] = useState("");
-  const [savingFu, setSavingFu] = useState(false);
-  const [note, setNote] = useState({ text: "", outcome: "" });
+  const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [note, setNote] = useState({ date: "", text: "", outcome: "" });
+  const [savingSession, setSavingSession] = useState(false);
+  const [deletingSession, setDeletingSession] = useState(false);
 
-  const trackedMemberIds = new Set(followUps.map((fu) => fu.memberId).filter(Boolean));
+  const mentorCandidates = useMemo(
+    () =>
+      members
+        .filter((m) => m.active)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [members]
+  );
+
+  const trackedMemberIds = new Set(students.map((s) => s.memberId).filter(Boolean));
 
   const selectableMembers = members
     .filter((m) => m.active && !trackedMemberIds.has(m.id))
@@ -3431,140 +4025,533 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
     )
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const selectedMember = members.find((m) => m.id === newFu.memberId);
+  const selectedMember = members.find((m) => m.id === enrollForm.memberId);
 
-  const load = () => api<FollowUp[]>("/follow-ups").then(setFollowUps).catch(() => {});
+  const classByMentor = useMemo(() => {
+    const map = new Map<string, ClassStudent[]>();
+    for (const s of students) {
+      const key = s.assignedToId || "unassigned";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(s);
+    }
+    return [...map.entries()].sort((a, b) => {
+      const nameA = memberName(members, a[0] === "unassigned" ? null : a[0]);
+      const nameB = memberName(members, b[0] === "unassigned" ? null : b[0]);
+      return nameA.localeCompare(nameB);
+    });
+  }, [students, members]);
+
+  const stageCounts = useMemo(() => {
+    const counts: Record<DiscipleshipStage, number> = {
+      Invitee: 0,
+      "New Convert": 0,
+      "In Training": 0,
+      Graduated: 0,
+    };
+    for (const s of students) counts[s.stage] += 1;
+    return counts;
+  }, [students]);
+
+  const load = () => api<ClassStudent[]>("/follow-ups").then(setStudents).catch(() => toast.error("Could not load class roster"));
 
   useEffect(() => { load(); }, []);
 
-  const addFollowUp = async () => {
-    if (!newFu.memberId) {
-      alert("Please select a member");
+  const canActOnStudent = (student: ClassStudent) =>
+    canManageClass || student.assignedToId === currentUser.id;
+
+  const resetEnrollForm = () => {
+    setEnrollType("member");
+    setEnrollForm({
+      memberId: "",
+      guestName: "",
+      guestContact: "",
+      stage: "Invitee",
+      mentorId: canAssignMentor ? "" : currentUser.id,
+    });
+    setMemberSearch("");
+  };
+
+  const enrollStudent = async () => {
+    if (enrollType === "member" && !enrollForm.memberId) {
+      toast.error("Select a member to enroll");
       return;
     }
-    setSavingFu(true);
+    if (enrollType === "guest" && !enrollForm.guestName.trim()) {
+      toast.error("Guest name is required");
+      return;
+    }
+    if (canAssignMentor && !enrollForm.mentorId) {
+      toast.error("Select a mentor");
+      return;
+    }
+    setSaving(true);
     try {
-      await api("/follow-ups", {
-        method: "POST",
-        body: JSON.stringify({ memberId: newFu.memberId, stage: newFu.stage, assignedToId: currentUser.id }),
-      });
-      setAddModal(false);
-      setNewFu({ memberId: "", stage: "Visitor" });
-      setMemberSearch("");
+      const body =
+        enrollType === "member"
+          ? {
+              memberId: enrollForm.memberId,
+              stage: enrollForm.stage,
+              assignedToId: enrollForm.mentorId || currentUser.id,
+            }
+          : {
+              name: enrollForm.guestName.trim(),
+              contact: enrollForm.guestContact.trim(),
+              stage: enrollForm.stage,
+              assignedToId: enrollForm.mentorId || currentUser.id,
+            };
+      await api("/follow-ups", { method: "POST", body: JSON.stringify(body) });
+      toast.success("Student enrolled in class");
+      setEnrollModal(false);
+      resetEnrollForm();
       load();
       onRefresh();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to create follow-up");
+      toast.error(e instanceof Error ? e.message : "Failed to enroll student");
     } finally {
-      setSavingFu(false);
+      setSaving(false);
     }
   };
 
-  const addNote = async () => {
-    if (!noteModal || !note.text) return;
-    await api(`/follow-ups/${noteModal}/notes`, {
-      method: "POST",
-      body: JSON.stringify({ text: note.text, outcome: note.outcome, date: new Date().toISOString().slice(0, 10) }),
+  const openLogSession = (studentId: string) => {
+    setNote({
+      date: new Date().toISOString().slice(0, 10),
+      text: "",
+      outcome: "",
     });
-    setNoteModal(null);
-    setNote({ text: "", outcome: "" });
-    load();
+    setSessionModal({ studentId });
   };
 
-  const updateStage = async (id: string, stage: FollowUp["stage"]) => {
-    await api(`/follow-ups/${id}`, { method: "PATCH", body: JSON.stringify({ stage }) });
-    load();
+  const openEditSession = (studentId: string, session: ClassStudent["notes"][number]) => {
+    setNote({
+      date: session.date,
+      text: session.text,
+      outcome: session.outcome || "",
+    });
+    setSessionModal({ studentId, noteId: session.id });
+  };
+
+  const closeSessionModal = () => {
+    if (savingSession) return;
+    setSessionModal(null);
+    setNote({ date: "", text: "", outcome: "" });
+  };
+
+  const saveSession = async () => {
+    if (!sessionModal || !note.text.trim()) {
+      toast.error("Session notes are required");
+      return;
+    }
+    const sessionDate = note.date || new Date().toISOString().slice(0, 10);
+    setSavingSession(true);
+    try {
+      if (sessionModal.noteId) {
+        await api(`/follow-ups/${sessionModal.studentId}/notes/${sessionModal.noteId}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            text: note.text,
+            outcome: note.outcome,
+            date: sessionDate,
+          }),
+        });
+        toast.success("Session updated");
+      } else {
+        await api(`/follow-ups/${sessionModal.studentId}/notes`, {
+          method: "POST",
+          body: JSON.stringify({
+            text: note.text,
+            outcome: note.outcome,
+            date: sessionDate,
+          }),
+        });
+        toast.success("Session logged");
+      }
+      closeSessionModal();
+      load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save session");
+    } finally {
+      setSavingSession(false);
+    }
+  };
+
+  const deleteSession = async () => {
+    if (!deleteSessionTarget) return;
+    setDeletingSession(true);
+    try {
+      await api(
+        `/follow-ups/${deleteSessionTarget.studentId}/notes/${deleteSessionTarget.noteId}`,
+        { method: "DELETE" }
+      );
+      toast.success("Session deleted");
+      setDeleteSessionTarget(null);
+      load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to delete session");
+    } finally {
+      setDeletingSession(false);
+    }
+  };
+
+  const updateStage = async (id: string, stage: DiscipleshipStage) => {
+    try {
+      await api(`/follow-ups/${id}`, { method: "PATCH", body: JSON.stringify({ stage }) });
+      load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update stage");
+    }
+  };
+
+  const reassignMentor = async (id: string, mentorId: string) => {
+    if (!mentorId) return;
+    try {
+      await api(`/follow-ups/${id}`, { method: "PATCH", body: JSON.stringify({ assignedToId: mentorId }) });
+      toast.success("Mentor updated");
+      load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to assign mentor");
+    }
+  };
+
+  const removeStudent = async () => {
+    if (!removeTarget) return;
+    setRemoving(true);
+    try {
+      await api(`/follow-ups/${removeTarget.id}`, { method: "DELETE" });
+      toast.success(`${removeTarget.name} removed from class`);
+      setRemoveTarget(null);
+      load();
+      onRefresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to remove student");
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  const renderStudentCard = (student: ClassStudent) => {
+    const canAct = canActOnStudent(student);
+    return (
+      <Card key={student.id} className="border-border/80">
+        <div className="flex flex-wrap justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-semibold">
+                {student.memberId ? (
+                  <MemberNameLink members={members} id={student.memberId} />
+                ) : (
+                  student.name
+                )}
+              </h3>
+              {!student.memberId && <Badge color="coral">Guest invitee</Badge>}
+              <Badge color={stageBadgeColor(student.stage)}>{student.stage}</Badge>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">{student.contact || "—"}</p>
+            {canAssignMentor && viewAllClass ? (
+              <div className="mt-3 max-w-xs">
+                <Select
+                  label="Mentor"
+                  value={student.assignedToId || ""}
+                  onChange={(v) => reassignMentor(student.id, v)}
+                  options={[
+                    { value: "", label: "Select mentor…" },
+                    ...mentorCandidates
+                      .filter((m) => m.id !== student.memberId)
+                      .map((m) => ({ value: m.id, label: m.name })),
+                  ]}
+                />
+              </div>
+            ) : (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Mentor: <span className="font-medium text-foreground">{memberName(members, student.assignedToId)}</span>
+              </p>
+            )}
+          </div>
+          {canAct && (
+            <div className="flex flex-col gap-2 sm:min-w-[10rem]">
+              <Select
+                label="Progress"
+                value={student.stage}
+                onChange={(v) => updateStage(student.id, v as DiscipleshipStage)}
+                options={DISCIPLESHIP_STAGES.map((s) => ({ value: s, label: s }))}
+              />
+              <Btn variant="secondary" onClick={() => openLogSession(student.id)}>
+                Log session
+              </Btn>
+              {viewAllClass && (
+                <Btn variant="ghost" className="text-destructive" onClick={() => setRemoveTarget(student)}>
+                  <Trash2 className="h-4 w-4" /> Remove
+                </Btn>
+              )}
+            </div>
+          )}
+        </div>
+        {student.notes.length > 0 && (
+          <div className="mt-4 space-y-2 border-t border-border pt-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Mentoring sessions</p>
+            {student.notes.map((n) => (
+              <div
+                key={n.id}
+                className="flex gap-2 rounded-lg border-l-2 border-violet-400/60 bg-muted/30 px-3 py-2 text-sm"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-muted-foreground">{n.date}</p>
+                  <p className="mt-0.5">{n.text}</p>
+                  {n.outcome && <p className="mt-1 text-xs text-muted-foreground">Outcome: {n.outcome}</p>}
+                </div>
+                {canAct && (
+                  <div className="flex shrink-0 flex-col gap-0.5">
+                    <button
+                      type="button"
+                      className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                      aria-label="Edit session"
+                      onClick={() => openEditSession(student.id, n)}
+                    >
+                      <Edit className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                      aria-label="Delete session"
+                      onClick={() =>
+                        setDeleteSessionTarget({
+                          studentId: student.id,
+                          noteId: n.id,
+                          preview: n.text.slice(0, 80),
+                        })
+                      }
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    );
   };
 
   return (
     <div className="space-y-6">
       <PageHeader
         {...pageHeaderProps("discipleship")}
-        title="Discipleship & Follow-up"
-        subtitle="Track visitors and new converts"
+        title="New Believers Class"
+        subtitle={
+          viewAllClass
+            ? "Enroll invitees and new converts; pastors assign mentors to tutor each student"
+            : "Students assigned to you for mentoring and discipleship"
+        }
         action={
-          canManageFu ? (
+          canManageClass ? (
             <Btn
               onClick={() => {
-                setMemberSearch("");
-                setNewFu({ memberId: "", stage: "Visitor" });
-                setAddModal(true);
+                resetEnrollForm();
+                setEnrollModal(true);
               }}
             >
-              <Plus className="h-4 w-4" /> Add
+              <Plus className="h-4 w-4" /> Enroll student
             </Btn>
           ) : undefined
         }
       />
-      {followUps.map((fu) => (
-        <Card key={fu.id}>
-          <div className="flex flex-wrap justify-between gap-2">
-            <div>
-              <h3 className="font-semibold">
-                {fu.memberId ? <MemberNameLink members={members} id={fu.memberId} /> : fu.name}
-              </h3>
-              <p className="text-sm text-muted-foreground">{fu.contact || "—"}</p>
-              <p className="text-xs text-muted-foreground">Assigned: {memberName(members, fu.assignedToId)}</p>
-              <Badge color="purple" className="mt-2">{fu.stage}</Badge>
-            </div>
-            {canManageFu && (
-              <div className="flex flex-col gap-2">
-                <Select value={fu.stage} onChange={(v) => updateStage(fu.id, v as FollowUp["stage"])} options={["Visitor", "New Convert", "Cell Member", "Worker"].map((s) => ({ value: s, label: s }))} />
-                <Btn variant="ghost" onClick={() => setNoteModal(fu.id)}>Add Note</Btn>
-              </div>
-            )}
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {DISCIPLESHIP_STAGES.map((stage) => (
+          <div key={stage} className="surface-card p-3 text-center sm:p-4">
+            <p className="text-2xl font-bold tabular-nums text-foreground">{stageCounts[stage]}</p>
+            <p className="text-xs text-muted-foreground">{stage}</p>
           </div>
-          {fu.notes.map((n, i) => (
-            <p key={i} className="mt-2 border-l-2 border-accent pl-3 text-sm">{n.date}: {n.text} — <em>{n.outcome}</em></p>
-          ))}
+        ))}
+      </div>
+
+      {students.length === 0 && (
+        <Card className="p-8 text-center">
+          <UsersRound className="mx-auto h-10 w-10 text-muted-foreground/60" />
+          <p className="mt-3 font-medium">No students enrolled yet</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {canManageClass
+              ? "Enroll an invitee or new convert and assign a mentor to start the class."
+              : "Your pastor will assign students to you when they join the class."}
+          </p>
         </Card>
-      ))}
-      <Modal open={addModal} onClose={() => setAddModal(false)} title="New Follow-up">
-        <div className="space-y-3">
-          <Input
-            label="Search members"
-            value={memberSearch}
-            onChange={setMemberSearch}
-            placeholder="Name, email, or phone"
-          />
-          <Select
-            label="Member"
-            value={newFu.memberId}
-            onChange={(v) => setNewFu((f) => ({ ...f, memberId: v }))}
-            options={[
-              { value: "", label: selectableMembers.length ? "Select a member…" : "No members available" },
-              ...selectableMembers.map((m) => ({
-                value: m.id,
-                label: `${m.name} · ${m.phone || m.email || "no contact"}`,
-              })),
+      )}
+
+      {viewAllClass
+        ? classByMentor.map(([mentorId, group]) => (
+            <section key={mentorId} className="space-y-3">
+              <div className="flex items-center gap-2">
+                <IconBox icon={UserCheck} tone="violet" size="sm" />
+                <h2 className="text-base font-semibold">
+                  {mentorId === "unassigned" ? "Unassigned" : memberName(members, mentorId)}
+                  <span className="ml-2 text-sm font-normal text-muted-foreground">({group.length} students)</span>
+                </h2>
+              </div>
+              <div className="space-y-3">{group.map(renderStudentCard)}</div>
+            </section>
+          ))
+        : <div className="space-y-3">{students.map(renderStudentCard)}</div>}
+
+      <Modal open={enrollModal} onClose={() => !saving && setEnrollModal(false)} title="Enroll in class">
+        <div className="space-y-4">
+          <TabBar
+            tabs={[
+              { id: "member", label: "Church member" },
+              { id: "guest", label: "Guest invitee" },
             ]}
+            value={enrollType}
+            onChange={setEnrollType}
           />
-          {selectedMember && (
-            <p className="rounded-lg bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-              Contact on file: <span className="font-medium text-foreground">{selectedMember.phone || selectedMember.email || "—"}</span>
-            </p>
+          {enrollType === "member" ? (
+            <>
+              <Input
+                label="Search members"
+                value={memberSearch}
+                onChange={setMemberSearch}
+                placeholder="Name, email, or phone"
+              />
+              <Select
+                label="Student"
+                value={enrollForm.memberId}
+                onChange={(v) => setEnrollForm((f) => ({ ...f, memberId: v }))}
+                options={[
+                  { value: "", label: selectableMembers.length ? "Select a member…" : "No members available" },
+                  ...selectableMembers.map((m) => ({
+                    value: m.id,
+                    label: `${m.name} · ${m.phone || m.email || "no contact"}`,
+                  })),
+                ]}
+              />
+              {selectedMember && (
+                <p className="rounded-lg bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                  Contact: <span className="font-medium text-foreground">{selectedMember.phone || selectedMember.email || "—"}</span>
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <Input
+                label="Name"
+                value={enrollForm.guestName}
+                onChange={(v) => setEnrollForm((f) => ({ ...f, guestName: v }))}
+                placeholder="Invitee name"
+              />
+              <Input
+                label="Contact"
+                value={enrollForm.guestContact}
+                onChange={(v) => setEnrollForm((f) => ({ ...f, guestContact: v }))}
+                placeholder="Phone or email"
+              />
+            </>
           )}
           <Select
-            label="Stage"
-            value={newFu.stage}
-            onChange={(v) => setNewFu((f) => ({ ...f, stage: v as FollowUp["stage"] }))}
-            options={["Visitor", "New Convert", "Cell Member", "Worker"].map((s) => ({ value: s, label: s }))}
+            label="Starting stage"
+            value={enrollForm.stage}
+            onChange={(v) => setEnrollForm((f) => ({ ...f, stage: v as DiscipleshipStage }))}
+            options={DISCIPLESHIP_STAGES.map((s) => ({ value: s, label: s }))}
           />
+          {canAssignMentor ? (
+            <Select
+              label="Mentor"
+              value={enrollForm.mentorId}
+              onChange={(v) => setEnrollForm((f) => ({ ...f, mentorId: v }))}
+              options={[
+                { value: "", label: "Select mentor…" },
+                ...mentorCandidates
+                  .filter((m) => m.id !== enrollForm.memberId)
+                  .map((m) => ({ value: m.id, label: `${m.name} · ${m.role}` })),
+              ]}
+            />
+          ) : (
+            <p className="rounded-lg bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+              You will mentor this student unless a pastor reassigns them.
+            </p>
+          )}
           <ModalFooter>
-            <Btn variant="ghost" onClick={() => setAddModal(false)}>
+            <Btn variant="ghost" onClick={() => setEnrollModal(false)} disabled={saving}>
               Cancel
             </Btn>
-            <Btn onClick={addFollowUp} disabled={savingFu || !newFu.memberId}>
-              {savingFu ? "Creating…" : "Create"}
+            <Btn onClick={enrollStudent} disabled={saving}>
+              {saving ? "Enrolling…" : "Enroll"}
             </Btn>
           </ModalFooter>
         </div>
       </Modal>
-      <Modal open={!!noteModal} onClose={() => setNoteModal(null)} title="Add Note">
+
+      <Modal
+        open={!!sessionModal}
+        onClose={closeSessionModal}
+        title={sessionModal?.noteId ? "Edit mentoring session" : "Log mentoring session"}
+      >
         <div className="space-y-3">
-          <Textarea label="Note" value={note.text} onChange={(v) => setNote((n) => ({ ...n, text: v }))} />
-          <Input label="Outcome" value={note.outcome} onChange={(v) => setNote((n) => ({ ...n, outcome: v }))} />
-          <Btn onClick={addNote}>Save Note</Btn>
+          <Input
+            label="Session date"
+            type="date"
+            value={note.date}
+            onChange={(v) => setNote((n) => ({ ...n, date: v }))}
+          />
+          <Textarea
+            label="What was taught / discussed"
+            value={note.text}
+            onChange={(v) => setNote((n) => ({ ...n, text: v }))}
+            placeholder="Lesson topic, scriptures, prayer, next steps…"
+          />
+          <Input
+            label="Outcome / homework"
+            value={note.outcome}
+            onChange={(v) => setNote((n) => ({ ...n, outcome: v }))}
+            placeholder="e.g. Will attend cell next week"
+          />
+          <ModalFooter>
+            <Btn variant="ghost" onClick={closeSessionModal} disabled={savingSession}>Cancel</Btn>
+            <Btn onClick={saveSession} disabled={savingSession}>
+              {savingSession ? "Saving…" : sessionModal?.noteId ? "Save changes" : "Save session"}
+            </Btn>
+          </ModalFooter>
+        </div>
+      </Modal>
+
+      <Modal
+        open={!!deleteSessionTarget}
+        onClose={() => !deletingSession && setDeleteSessionTarget(null)}
+        title="Delete mentoring session?"
+      >
+        <div className="space-y-4">
+          {deleteSessionTarget && (
+            <p className="text-sm text-muted-foreground">
+              Delete this session log?{" "}
+              {deleteSessionTarget.preview && (
+                <span className="block mt-2 rounded-lg bg-muted/50 px-3 py-2 text-foreground">
+                  “{deleteSessionTarget.preview}
+                  {deleteSessionTarget.preview.length >= 80 ? "…" : ""}”
+                </span>
+              )}
+            </p>
+          )}
+          <ModalFooter>
+            <Btn variant="secondary" disabled={deletingSession} onClick={() => setDeleteSessionTarget(null)}>
+              Cancel
+            </Btn>
+            <Btn variant="danger" disabled={deletingSession} onClick={deleteSession}>
+              {deletingSession ? "Deleting…" : "Delete"}
+            </Btn>
+          </ModalFooter>
+        </div>
+      </Modal>
+
+      <Modal open={!!removeTarget} onClose={() => !removing && setRemoveTarget(null)} title="Remove from class?">
+        <div className="space-y-4">
+          {removeTarget && (
+            <p className="text-sm text-muted-foreground">
+              Remove <span className="font-medium text-foreground">{removeTarget.name}</span> from the class? Session history will be deleted.
+            </p>
+          )}
+          <ModalFooter>
+            <Btn variant="secondary" disabled={removing} onClick={() => setRemoveTarget(null)}>Cancel</Btn>
+            <Btn variant="danger" disabled={removing} onClick={removeStudent}>
+              {removing ? "Removing…" : "Remove"}
+            </Btn>
+          </ModalFooter>
         </div>
       </Modal>
     </div>
@@ -3577,22 +4564,34 @@ interface Announcement {
   id: string;
   title: string;
   content: string;
-  target: "all" | "fellowship" | "cell" | "department" | "role";
+  target: "all" | "fellowship" | "cell" | "department" | "role" | "leaders";
   targetId?: string;
   targetRole?: string;
   pinned: boolean;
   expiresAt: string;
   createdAt: string;
+  createdBy?: string;
 }
+
+const emptyAnnouncementForm = () => ({
+  title: "",
+  content: "",
+  target: "all" as Announcement["target"],
+  targetId: "",
+  targetRole: "",
+  pinned: false,
+  expiresAt: "",
+});
 
 export function AnnouncementsPage({ cells, fellowships, departments, currentUser, onRefresh }: PageProps) {
   const { departmentAbilities } = useAuth();
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
-  const [modal, setModal] = useState(false);
-  const [form, setForm] = useState({
-    title: "", content: "", target: "all" as Announcement["target"],
-    targetId: "", targetRole: "", pinned: false, expiresAt: "",
-  });
+  const [modal, setModal] = useState<"new" | "edit" | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Announcement | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [form, setForm] = useState(emptyAnnouncementForm);
 
   const load = () => api<Announcement[]>("/announcements").then(setAnnouncements).catch(() => {});
 
@@ -3604,56 +4603,157 @@ export function AnnouncementsPage({ cells, fellowships, departments, currentUser
     if (a.target === "cell") return cells.find((c) => c.id === a.targetId)?.name || "Cell";
     if (a.target === "department") return departments.find((d) => d.id === a.targetId)?.name || "Department";
     if (a.target === "role") return a.targetRole || "Role";
+    if (a.target === "leaders") return "All leaders";
     return a.target;
   };
 
-  const post = async () => {
-    await api("/announcements", {
-      method: "POST",
-      body: JSON.stringify({
-        title: form.title,
-        content: form.content,
-        target: form.target,
-        targetId: form.target === "role" ? undefined : form.targetId || undefined,
-        targetRole: form.target === "role" ? form.targetRole : undefined,
-        pinned: form.pinned,
-        expiresAt: form.expiresAt || new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10),
-      }),
+  const isExpired = (a: Announcement) => {
+    const today = new Date().toISOString().slice(0, 10);
+    return a.expiresAt < today;
+  };
+
+  const openNew = () => {
+    setEditId(null);
+    setForm(emptyAnnouncementForm());
+    setModal("new");
+  };
+
+  const openEdit = (a: Announcement) => {
+    setEditId(a.id);
+    setForm({
+      title: a.title,
+      content: a.content,
+      target: a.target,
+      targetId: a.targetId || "",
+      targetRole: a.targetRole || "",
+      pinned: a.pinned,
+      expiresAt: a.expiresAt,
     });
-    setModal(false);
-    load();
-    onRefresh();
+    setModal("edit");
+  };
+
+  const closeModal = () => {
+    if (saving) return;
+    setModal(null);
+    setEditId(null);
+    setForm(emptyAnnouncementForm());
+  };
+
+  const save = async () => {
+    if (!form.title.trim()) {
+      toast.error("Title is required");
+      return;
+    }
+    const payload = {
+      title: form.title.trim(),
+      content: form.content,
+      target: form.target,
+      targetId: form.target === "role" || form.target === "leaders" ? undefined : form.targetId || undefined,
+      targetRole: form.target === "role" ? form.targetRole : undefined,
+      pinned: form.pinned,
+      expiresAt: form.expiresAt || new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10),
+    };
+    setSaving(true);
+    try {
+      if (modal === "edit" && editId) {
+        await api(`/announcements/${editId}`, { method: "PATCH", body: JSON.stringify(payload) });
+        toast.success("Announcement updated");
+      } else {
+        await api("/announcements", { method: "POST", body: JSON.stringify(payload) });
+        toast.success("Announcement posted");
+      }
+      closeModal();
+      load();
+      onRefresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save announcement");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await api(`/announcements/${deleteTarget.id}`, { method: "DELETE" });
+      toast.success(`"${deleteTarget.title}" deleted`);
+      setDeleteTarget(null);
+      load();
+      onRefresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to delete announcement");
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const canPost = canPostAnnouncementsForUser(currentUser.role, departmentAbilities);
 
   return (
     <div className="space-y-6">
-      <PageHeader {...pageHeaderProps("announcements")} title="Announcements" subtitle="Targeted church notices" action={canPost ? <Btn onClick={() => setModal(true)}><Plus className="h-4 w-4" /> Post</Btn> : undefined} />
+      <PageHeader
+        {...pageHeaderProps("announcements")}
+        title="Announcements"
+        subtitle="Targeted church notices"
+        action={canPost ? <Btn onClick={openNew}><Plus className="h-4 w-4" /> Post</Btn> : undefined}
+      />
+      {announcements.length === 0 && (
+        <p className="text-sm text-muted-foreground">No announcements yet.</p>
+      )}
       {announcements.map((a) => (
-        <Card key={a.id} className={a.pinned ? "border-highlight" : ""}>
+        <Card key={a.id} className={cn(a.pinned && "border-highlight", isExpired(a) && "opacity-75")}>
           <div className="flex flex-wrap items-start gap-2">
-            {a.pinned && <Pin className="h-4 w-4 text-highlight" />}
-            <div className="flex-1">
-              <h3 className="font-semibold">{a.title}</h3>
+            {a.pinned && <Pin className="h-4 w-4 shrink-0 text-highlight" />}
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-semibold">{a.title}</h3>
+                {isExpired(a) && <Badge color="gray">Expired</Badge>}
+              </div>
               <Badge color="teal" className="mt-1">{targetLabel(a)}</Badge>
-              <p className="mt-2 text-sm">{a.content}</p>
+              <p className="mt-2 whitespace-pre-wrap text-sm">{a.content}</p>
               <p className="mt-2 text-xs text-muted-foreground">Expires: {a.expiresAt}</p>
             </div>
+            {canPost && (
+              <div className="flex shrink-0 gap-1">
+                <button
+                  type="button"
+                  className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  aria-label={`Edit ${a.title}`}
+                  onClick={() => openEdit(a)}
+                >
+                  <Edit className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  aria-label={`Delete ${a.title}`}
+                  onClick={() => setDeleteTarget(a)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            )}
           </div>
         </Card>
       ))}
-      <Modal open={modal} onClose={() => setModal(false)} title="Post Announcement">
+      <Modal open={!!modal} onClose={closeModal} title={modal === "edit" ? "Edit Announcement" : "Post Announcement"}>
         <div className="space-y-3">
           <Input label="Title" value={form.title} onChange={(v) => setForm((f) => ({ ...f, title: v }))} />
           <Textarea label="Content" value={form.content} onChange={(v) => setForm((f) => ({ ...f, content: v }))} />
           <Select label="Target" value={form.target} onChange={(v) => setForm((f) => ({ ...f, target: v as Announcement["target"] }))} options={[
             { value: "all", label: "All members" },
+            { value: "leaders", label: "All leaders" },
             { value: "fellowship", label: "Fellowship" },
             { value: "cell", label: "Cell" },
             { value: "department", label: "Department" },
             { value: "role", label: "Role" },
           ]} />
+          {form.target === "leaders" && (
+            <p className="text-xs text-muted-foreground">
+              Visible to pastors, admins, fellowship/cell/sub-cell leaders, and department heads only.
+            </p>
+          )}
           {form.target === "fellowship" && <Select label="Fellowship" value={form.targetId} onChange={(v) => setForm((f) => ({ ...f, targetId: v }))} options={fellowships.map((f) => ({ value: f.id, label: f.name }))} />}
           {form.target === "cell" && <Select label="Cell" value={form.targetId} onChange={(v) => setForm((f) => ({ ...f, targetId: v }))} options={cells.map((c) => ({ value: c.id, label: c.name }))} />}
           {form.target === "department" && <Select label="Department" value={form.targetId} onChange={(v) => setForm((f) => ({ ...f, targetId: v }))} options={departments.map((d) => ({ value: d.id, label: d.name }))} />}
@@ -3663,7 +4763,27 @@ export function AnnouncementsPage({ cells, fellowships, departments, currentUser
             <input type="checkbox" checked={form.pinned} onChange={(e) => setForm((f) => ({ ...f, pinned: e.target.checked }))} />
             Pin announcement
           </label>
-          <Btn onClick={post}>Post</Btn>
+          <ModalFooter>
+            <Btn variant="ghost" onClick={closeModal} disabled={saving}>Cancel</Btn>
+            <Btn onClick={save} disabled={saving}>
+              {saving ? "Saving…" : modal === "edit" ? "Save changes" : "Post"}
+            </Btn>
+          </ModalFooter>
+        </div>
+      </Modal>
+      <Modal open={!!deleteTarget} onClose={() => !deleting && setDeleteTarget(null)} title="Delete announcement?">
+        <div className="space-y-4">
+          {deleteTarget && (
+            <p className="text-sm text-muted-foreground">
+              Remove <span className="font-medium text-foreground">{deleteTarget.title}</span>? This cannot be undone.
+            </p>
+          )}
+          <ModalFooter>
+            <Btn variant="secondary" disabled={deleting} onClick={() => setDeleteTarget(null)}>Cancel</Btn>
+            <Btn variant="danger" disabled={deleting} onClick={confirmDelete}>
+              {deleting ? "Deleting…" : "Delete"}
+            </Btn>
+          </ModalFooter>
         </div>
       </Modal>
     </div>
@@ -3798,14 +4918,31 @@ interface MediaItem {
   status?: "pending" | "approved" | "rejected";
 }
 
+type MediaUploadSource = "file" | "driveLink";
+
 export function MediaPage({ currentUser }: PageProps) {
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [capabilities, setCapabilities] = useState({ canUpload: false, canApprove: false, canViewPending: false });
   const [search, setSearch] = useState("");
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadSource, setUploadSource] = useState<MediaUploadSource>("file");
+  const [videoLink, setVideoLink] = useState("");
   const [form, setForm] = useState({ title: "", type: "video", speaker: "", series: "", topic: "", date: "", shareTarget: "all", shareTargetId: "" });
   const [file, setFile] = useState<File | null>(null);
   const [playing, setPlaying] = useState<MediaItem | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const resetUploadForm = () => {
+    setForm({ title: "", type: "video", speaker: "", series: "", topic: "", date: "", shareTarget: "all", shareTargetId: "" });
+    setFile(null);
+    setVideoLink("");
+    setUploadSource("file");
+  };
+
+  const closeUploadModal = () => {
+    setUploadOpen(false);
+    resetUploadForm();
+  };
 
   const load = useCallback(() => {
     const params = search ? `?search=${encodeURIComponent(search)}` : "";
@@ -3824,22 +4961,66 @@ export function MediaPage({ currentUser }: PageProps) {
   }, [load]);
 
   const upload = async () => {
-    if (!form.title) return;
-    const fd = new FormData();
-    fd.append("title", form.title);
-    fd.append("type", form.type);
-    fd.append("speaker", form.speaker);
-    fd.append("series", form.series);
-    fd.append("topic", form.topic);
-    fd.append("date", form.date || new Date().toISOString().slice(0, 10));
-    fd.append("shareTarget", form.shareTarget);
-    if (form.shareTargetId) fd.append("shareTargetId", form.shareTargetId);
-    if (file) fd.append("file", file);
-    await api("/media", { method: "POST", body: fd });
-    setUploadOpen(false);
-    setForm({ title: "", type: "video", speaker: "", series: "", topic: "", date: "", shareTarget: "all", shareTargetId: "" });
-    setFile(null);
-    load();
+    if (!form.title.trim()) {
+      toast.error("Title is required");
+      return;
+    }
+    if (form.type === "video" && uploadSource === "driveLink") {
+      const link = videoLink.trim();
+      if (!link) {
+        toast.error("Paste a Google Drive video link");
+        return;
+      }
+      if (!isGoogleDriveUrl(link) || !normalizeGoogleDriveUrl(link)) {
+        toast.error("Use a valid Google Drive share link (e.g. drive.google.com/file/d/…)");
+        return;
+      }
+    } else if (form.type === "video" && uploadSource === "file" && !file) {
+      toast.error("Choose a video file or switch to Google Drive link");
+      return;
+    } else if (form.type !== "video" && !file) {
+      toast.error("Choose a file to upload");
+      return;
+    }
+
+    setUploading(true);
+    try {
+      if (form.type === "video" && uploadSource === "driveLink") {
+        await api("/media", {
+          method: "POST",
+          body: JSON.stringify({
+            title: form.title.trim(),
+            type: form.type,
+            speaker: form.speaker,
+            series: form.series,
+            topic: form.topic,
+            date: form.date || new Date().toISOString().slice(0, 10),
+            shareTarget: form.shareTarget,
+            shareTargetId: form.shareTargetId || undefined,
+            fileUrl: videoLink.trim(),
+          }),
+        });
+      } else {
+        const fd = new FormData();
+        fd.append("title", form.title.trim());
+        fd.append("type", form.type);
+        fd.append("speaker", form.speaker);
+        fd.append("series", form.series);
+        fd.append("topic", form.topic);
+        fd.append("date", form.date || new Date().toISOString().slice(0, 10));
+        fd.append("shareTarget", form.shareTarget);
+        if (form.shareTargetId) fd.append("shareTargetId", form.shareTargetId);
+        if (file) fd.append("file", file);
+        await api("/media", { method: "POST", body: fd });
+      }
+      toast.success(uploadSource === "driveLink" ? "Video link added" : "Media uploaded");
+      closeUploadModal();
+      load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
   };
 
   const setMediaStatus = async (id: string, status: "approved" | "rejected") => {
@@ -3893,8 +5074,21 @@ export function MediaPage({ currentUser }: PageProps) {
                         <Play className="h-3 w-3" /> Play
                       </Btn>
                     )}
-                    <a href={m.fileUrl} download className="inline-flex items-center gap-1 text-sm text-accent">
-                      <Download className="h-4 w-4" /> Download
+                    <a
+                      href={getMediaOpenUrl(m.fileUrl) || m.fileUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-sm text-accent"
+                    >
+                      {isGoogleDriveUrl(m.fileUrl) ? (
+                        <>
+                          <Link2 className="h-4 w-4" /> Open in Drive
+                        </>
+                      ) : (
+                        <>
+                          <Download className="h-4 w-4" /> Download
+                        </>
+                      )}
                     </a>
                   </div>
                 )}
@@ -3910,22 +5104,78 @@ export function MediaPage({ currentUser }: PageProps) {
         );
         })}
       </div>
-      <Modal open={uploadOpen} onClose={() => setUploadOpen(false)} title="Upload Media">
+      <Modal open={uploadOpen} onClose={closeUploadModal} title="Add Media" size="md">
         <div className="space-y-3">
           <Input label="Title" value={form.title} onChange={(v) => setForm((f) => ({ ...f, title: v }))} />
-          <Select label="Type" value={form.type} onChange={(v) => setForm((f) => ({ ...f, type: v }))} options={["video", "audio", "notes", "slides"].map((t) => ({ value: t, label: t }))} />
+          <Select
+            label="Type"
+            value={form.type}
+            onChange={(v) => {
+              setForm((f) => ({ ...f, type: v }));
+              if (v !== "video") setUploadSource("file");
+            }}
+            options={["video", "audio", "notes", "slides"].map((t) => ({ value: t, label: t }))}
+          />
           <Input label="Speaker" value={form.speaker} onChange={(v) => setForm((f) => ({ ...f, speaker: v }))} />
           <Input label="Series" value={form.series} onChange={(v) => setForm((f) => ({ ...f, series: v }))} />
-          <Input label="Topic" value={form.topic} onChange={(v) => setForm((f) => ({ ...f, topic: v }))} />
           <Input label="Date" type="date" value={form.date} onChange={(v) => setForm((f) => ({ ...f, date: v }))} />
-          <label className="block text-sm font-medium">File</label>
           <Select label="Share with" value={form.shareTarget} onChange={(v) => setForm((f) => ({ ...f, shareTarget: v }))} options={[{ value: "all", label: "All members" }, { value: "cell", label: "Cell" }, { value: "fellowship", label: "Fellowship" }, { value: "department", label: "Department" }]} />
-          <input type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} className="text-sm" />
-          <Btn onClick={upload}>Upload</Btn>
+          {form.type === "video" && (
+            <TabBar
+              tabs={[
+                { id: "file" as const, label: "Upload file" },
+                { id: "driveLink" as const, label: "Google Drive link" },
+              ]}
+              value={uploadSource}
+              onChange={setUploadSource}
+            />
+          )}
+          {form.type === "video" && uploadSource === "driveLink" ? (
+            <Input
+              label="Google Drive video link"
+              value={videoLink}
+              onChange={setVideoLink}
+              placeholder="https://drive.google.com/file/d/…/view"
+            />
+          ) : (
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-foreground">File</span>
+              <input
+                type="file"
+                accept={form.type === "video" ? "video/*" : form.type === "audio" ? "audio/*" : undefined}
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+                className="w-full text-sm"
+              />
+            </label>
+          )}
+          {form.type === "video" && uploadSource === "driveLink" && (
+            <p className="text-xs text-muted-foreground">
+              Share the video in Google Drive (Anyone with the link can view), then paste the link here. Playback uses Google&apos;s embedded player.
+            </p>
+          )}
+          <ModalFooter>
+            <Btn variant="ghost" className="!flex-1" onClick={closeUploadModal} disabled={uploading}>
+              Cancel
+            </Btn>
+            <Btn className="!flex-1" onClick={upload} disabled={uploading}>
+              {uploading ? "Saving…" : uploadSource === "driveLink" ? "Add link" : "Upload"}
+            </Btn>
+          </ModalFooter>
         </div>
       </Modal>
-      <Modal open={!!playing} onClose={() => setPlaying(null)} title={playing?.title || "Media"}>
-        {playing?.fileUrl && playing.type === "video" && (
+      <Modal open={!!playing} onClose={() => setPlaying(null)} title={playing?.title || "Media"} size="md">
+        {playing?.fileUrl && playing.type === "video" && getMediaEmbedUrl(playing.fileUrl) && (
+          <div className="aspect-video w-full overflow-hidden rounded-lg bg-black">
+            <iframe
+              src={getMediaEmbedUrl(playing.fileUrl)!}
+              title={playing.title}
+              className="h-full w-full border-0"
+              allow="autoplay; encrypted-media"
+              allowFullScreen
+            />
+          </div>
+        )}
+        {playing?.fileUrl && playing.type === "video" && !getMediaEmbedUrl(playing.fileUrl) && (
           <video src={playing.fileUrl} controls className="w-full rounded-lg" />
         )}
         {playing?.fileUrl && playing.type === "audio" && (

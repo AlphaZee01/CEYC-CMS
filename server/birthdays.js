@@ -31,7 +31,11 @@ function birthdayTiming(day, month, year, referenceDate = new Date()) {
 }
 
 function formatCelebrant(row, contextYear, contextMonth, referenceDate = new Date()) {
-  const [birthYear, birthMonth, birthDay] = row.date_of_birth.split("-").map(Number);
+  const parts = String(row.date_of_birth || "").split("-").map(Number);
+  if (parts.length < 3 || parts.some((n) => !Number.isFinite(n))) {
+    return null;
+  }
+  const [birthYear, birthMonth, birthDay] = parts;
   const day = birthDay;
   const monthLabel = MONTH_NAMES[contextMonth - 1];
   const ageOnBirthday = contextYear - birthYear;
@@ -66,7 +70,9 @@ export async function getBirthdaysForMonth(db, year, month, referenceDate = new 
   if (!parsed) return null;
 
   const rows = await queryBirthdayRows(db, parsed.month);
-  const celebrants = rows.map((row) => formatCelebrant(row, parsed.year, parsed.month, referenceDate));
+  const celebrants = rows
+    .map((row) => formatCelebrant(row, parsed.year, parsed.month, referenceDate))
+    .filter(Boolean);
 
   return {
     year: parsed.year,

@@ -100,7 +100,7 @@ export function normalizeLogoUrl(url, req) {
     const matched = recovered ? findLocalLogoForExternalUrl(recovered) : null;
     if (matched) return resolveAssetUrl(matched, req);
     if (recovered) return recovered;
-    return null;
+    return resolveAssetUrl(trimmed, req);
   }
 
   if (isExternalUrl(trimmed)) {

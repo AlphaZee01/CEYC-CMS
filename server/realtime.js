@@ -37,3 +37,23 @@ export async function broadcastChatMessage(message, memberIds) {
     })
   );
 }
+
+/** Notify message sender that a recipient read their message */
+export async function broadcastMessageRead(senderId, payload) {
+  const sb = getClient();
+  if (!sb || !senderId) return;
+
+  const channel = sb.channel(`member:${senderId}`, {
+    config: { broadcast: { self: true } },
+  });
+  if (typeof channel.httpSend === "function") {
+    await channel.httpSend("message_read", payload);
+  } else {
+    await channel.send({
+      type: "broadcast",
+      event: "message_read",
+      payload,
+    });
+  }
+  await sb.removeChannel(channel);
+}

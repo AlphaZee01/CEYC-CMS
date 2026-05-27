@@ -10,7 +10,7 @@ import {
 } from "./rbac.js";
 import { logAudit } from "./audit.js";
 import { updateSupabaseAuthPassword } from "./auth-sync.js";
-import { persistUploadedFile } from "./storage.js";
+import { persistUploadedFile, brandingFromSettings } from "./storage.js";
 
 export function registerCompletionRoutes(app, { upload, uid, getMemberDepartments, loadMember, UPLOAD_DIR }) {
   const logoStorage = upload;
@@ -108,7 +108,9 @@ export function registerCompletionRoutes(app, { upload, uid, getMemberDepartment
       );
       await getDb().prepare("UPDATE church_settings SET logo_url = ? WHERE id = 1").run(url);
       await logAudit(req.user.member.id, "logo_uploaded", "settings", "1");
-      res.json({ logoUrl: url });
+      const row = await getDb().prepare("SELECT * FROM church_settings WHERE id = 1").get();
+      const branding = brandingFromSettings(row, req);
+      res.json({ logoUrl: branding.logoUrl, branding });
     } catch (err) {
       console.error("Logo upload failed:", err.message);
       res.status(500).json({ error: "Logo upload failed" });
@@ -134,11 +136,6 @@ export function registerCompletionRoutes(app, { upload, uid, getMemberDepartment
     }
     await getDb().prepare("DELETE FROM events WHERE id = ?").run(req.params.id);
     await logAudit(req.user.member.id, "delete", "event", req.params.id);
-    res.json({ ok: true });
-  });
-
-  app.delete("/api/announcements/:id", authMiddleware, async (req, res) => {
-    await getDb().prepare("DELETE FROM announcements WHERE id = ?").run(req.params.id);
     res.json({ ok: true });
   });
 
