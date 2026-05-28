@@ -1,4 +1,5 @@
 import { publicApi } from "@/lib/api";
+import { applyWebAppBranding } from "@/lib/web-app-branding";
 
 export interface ChurchBranding {
   name: string;
@@ -29,6 +30,7 @@ export function cacheBranding(branding: ChurchBranding) {
   } catch {
     /* ignore quota errors */
   }
+  applyWebAppBranding(branding);
 }
 
 export function clearBrandingCache() {
@@ -37,6 +39,7 @@ export function clearBrandingCache() {
   } catch {
     /* ignore */
   }
+  applyWebAppBranding(DEFAULT_BRANDING);
 }
 
 export function brandingFromSettingsRecord(settings: {

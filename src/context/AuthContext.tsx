@@ -16,6 +16,7 @@ import {
   type ChurchBranding,
   DEFAULT_BRANDING,
 } from "@/lib/branding";
+import { clearPwaInstallDismiss } from "@/lib/pwa-install";
 import { authLog, authLogError, authLogStart, authLogTimed } from "@/lib/auth-log";
 
 interface AuthState {
@@ -196,11 +197,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     if (useSupabaseForAuth()) await signOutSupabase();
+    clearPwaInstallDismiss();
+    clearBrandingCache();
     setToken(null);
     setUser(null);
     setPages([]);
     setDepartmentAbilities([]);
-    clearBrandingCache();
     setBranding(DEFAULT_BRANDING);
   };
 

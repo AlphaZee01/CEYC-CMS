@@ -10,6 +10,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { MobileBottomNav, MOBILE_NAV_PRIORITY } from "@/components/church/MobileBottomNav";
 import { ChurchBrand } from "@/components/church/ChurchBrand";
+import { PwaInstallPrompt } from "@/components/church/PwaInstallPrompt";
 
 interface Notification {
   id: string;
@@ -277,6 +278,12 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
           menuActive={moreNavActive}
         />
       </div>
+
+      <PwaInstallPrompt
+        churchName={settings.name}
+        logoUrl={settings.logoUrl}
+        tagline={settings.tagline}
+      />
     </div>
   );
 }

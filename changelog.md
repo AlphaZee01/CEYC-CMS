@@ -1,5 +1,20 @@
 # Changelog
 
+## [2026-05-27] — Install app prompt after login
+
+### Added
+- **Post-login install prompt** — modal appears right after sign-in with an **Install** button (Chrome/Edge/Android) or step-by-step **Add to Home Screen** guide on iPhone/iPad Safari.
+- Dismissal is remembered for the session; logging out clears it so the prompt can show again on the next login.
+
+## [2026-05-27] — Progressive Web App (installable)
+
+### Added
+- **PWA** — service worker (offline shell, auto-update), `standalone` display mode, and dynamic `/manifest.webmanifest` from church settings.
+- **Favicon & install icons** — browser tab icon, Apple touch icon, and manifest icons use the current church logo from settings (updated when branding loads or changes).
+
+### Changed
+- **Document title & meta** — page title, description, and Open Graph tags follow church name/tagline/logo from branding cache and API.
+
 ## [2026-05-27] — Supabase as primary database
 
 ### Added

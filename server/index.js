@@ -54,6 +54,7 @@ import { canViewBirthdays, getBirthdaysForMonth } from "./birthdays.js";
 import { syncAuthUsers, createSupabaseAuthUser, updateSupabaseAuthPassword } from "./auth-sync.js";
 import { useSupabaseAuth } from "./supabase.js";
 import { persistUploadedFile, brandingFromSettings, normalizeLogoUrlForStorage } from "./storage.js";
+import { buildWebAppManifest } from "./web-app-manifest.js";
 import { isGoogleDriveUrl, normalizeGoogleDriveUrl } from "./media-url.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -154,6 +155,17 @@ app.get("/api/public/branding", async (req, res) => {
   } catch (err) {
     console.error("public/branding error:", err);
     res.status(500).json({ error: "Failed to load branding" });
+  }
+});
+
+app.get("/manifest.webmanifest", async (req, res) => {
+  try {
+    const s = await getDb().prepare("SELECT name, tagline, logo_url FROM church_settings WHERE id = 1").get();
+    res.type("application/manifest+json");
+    res.json(buildWebAppManifest(s, req));
+  } catch (err) {
+    console.error("manifest.webmanifest error:", err);
+    res.status(500).json({ error: "Failed to load manifest" });
   }
 });
 
