@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, createContext, useContext, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, LogOut, Menu, X } from "lucide-react";
+import { Bell, LogOut, X } from "lucide-react";
 import { memberProfilePath } from "@/lib/rbac";
 import { Badge, AvatarCircle, cn } from "@/components/church/ui";
 import { PAGE_META, type PageId, type Member } from "@/types/church";
@@ -78,7 +78,7 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
   }, [notificationsOpen]);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
-  const mobileNavItems = MOBILE_NAV_PRIORITY.filter((p) => pages.includes(p)).slice(0, 5);
+  const mobileNavItems = MOBILE_NAV_PRIORITY.filter((p) => pages.includes(p)).slice(0, 4);
   const moreNavActive = sidebarOpen || !mobileNavItems.includes(activePage);
 
   const markAllRead = async () => {
@@ -263,21 +263,6 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
               <div className="hidden items-center gap-2 sm:flex">
                 <Badge color="blue">{user.role}</Badge>
               </div>
-
-              <button
-                type="button"
-                className={cn(
-                  "touch-target flex h-10 w-10 items-center justify-center rounded-xl transition",
-                  moreNavActive
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                )}
-                onClick={() => setSidebarOpen((open) => !open)}
-                aria-label="Open menu"
-                aria-expanded={sidebarOpen}
-              >
-                <Menu className="h-5 w-5 shrink-0" strokeWidth={moreNavActive ? 2.25 : 2} />
-              </button>
             </div>
           </div>
         </header>
@@ -295,6 +280,8 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
           items={mobileNavItems}
           activePage={activePage}
           onNavigate={handleNavigate}
+          onOpenMenu={() => setSidebarOpen(true)}
+          menuActive={moreNavActive}
         />
       </div>
 

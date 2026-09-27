@@ -87,6 +87,12 @@
 ### Fixed
 - **Sign-in** — demo (and any Supabase) login no longer crashes with `Cannot read properties of undefined (reading 'user')`. Session setup was missing the department-abilities setter, so the profile response was never passed through.
 
+## [2026-09-27] — Mobile nav: More on bottom bar
+
+### Changed
+- **Bottom nav** — **More** opens the full menu again; **Events** removed from the tab bar (still in the sidebar).
+- **Header** — menu button removed on mobile (notifications + role badge only).
+
 ## [2026-09-27] — Vercel deployment
 
 ### Added
