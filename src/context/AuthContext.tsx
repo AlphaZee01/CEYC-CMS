@@ -6,6 +6,7 @@ import {
   signInWithEmail,
   signOutSupabase,
   clearStaleSupabaseSession,
+  ensureValidSupabaseSession,
   isRefreshTokenError,
 } from "@/lib/supabase";
 import type { AuthUser, PageId } from "@/types/church";
@@ -92,7 +93,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (err) {
         const message = err instanceof Error ? err.message : "";
         authLogError("Session refresh failed", err);
-        if (isRefreshTokenError(message) || /session expired|authentication required|invalid session/i.test(message)) {
+        if (
+          isRefreshTokenError(message) ||
+          /session expired|authentication required|invalid session/i.test(message)
+        ) {
           await clearSession();
         } else {
           setUser(null);
@@ -119,9 +123,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         authLog("Auth mode from server", mode);
 
         if (mode === "supabase" && supabase) {
+          await ensureValidSupabaseSession();
+          const { data: { session: initialSession } } = await supabase.auth.getSession();
+          if (mounted) {
+            if (initialSession) await refresh();
+            else {
+              setUser(null);
+              setPages([]);
+              setDepartmentAbilities([]);
+            }
+          }
+
           const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
             if (!mounted) return;
             authLog(`Supabase auth: ${event}`, session ? "has session" : "no session");
+
+            if (event === "INITIAL_SESSION") return;
 
             if (event === "SIGNED_OUT" || event === "USER_DELETED") {
               setUser(null);
@@ -130,24 +147,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               return;
             }
 
-            if (event === "INITIAL_SESSION") {
-              if (session) await refresh();
-              else {
-                setUser(null);
-                setPages([]);
-                setDepartmentAbilities([]);
-              }
-              return;
-            }
-
-            if (session && event === "TOKEN_REFRESHED") {
+            if (session && (event === "TOKEN_REFRESHED" || event === "SIGNED_IN")) {
               await refresh();
-            }
-
-            if (!session) {
-              setUser(null);
-              setPages([]);
-              setDepartmentAbilities([]);
             }
           });
 
@@ -175,7 +176,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (useSupabaseForAuth()) {
       await authLogTimed("Supabase signInWithPassword", () => signInWithEmail(email, password));
       const data = await authLogTimed("GET /api/auth/me", () => authApi.me());
-      applySession(setUser, setPages, setBranding, data);
+      applySession(setUser, setPages, setDepartmentAbilities, setBranding, data);
       authLog("Sign-in complete");
       return;
     }

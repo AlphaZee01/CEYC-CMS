@@ -58,8 +58,9 @@ export default defineConfig(({ mode }) => ({
           },
         ],
       },
+      // Service worker in dev caches /node_modules/.vite/deps and causes 504 Outdated Optimize Dep.
       devOptions: {
-        enabled: true,
+        enabled: process.env.VITE_PWA_DEV === "true",
         navigateFallback: "index.html",
       },
     }),

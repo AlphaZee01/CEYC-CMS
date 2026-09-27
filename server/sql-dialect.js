@@ -1,4 +1,4 @@
-/** Translate SQLite-oriented SQL used by the API to Postgres (Supabase). */
+/** Translate app SQL placeholders and SQLite idioms to Postgres (Supabase). */
 
 function convertPlaceholders(sql) {
   let index = 0;
@@ -33,28 +33,12 @@ export function toPostgresSql(sql) {
     return "TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD')";
   });
   s = s.replace(/date\s*\(\s*'now'\s*\)/gi, "TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD')");
+  s = s.replace(/\browid\b/gi, "id");
+  s = s.replace(/strftime\s*\(\s*'%Y-%m'\s*,\s*([\w.]+)\s*\)/gi, "TO_CHAR($1::date, 'YYYY-MM')");
+  s = s.replace(/strftime\s*\(\s*'%m'\s*,\s*([\w.]+)\s*\)/gi, "TO_CHAR($1::date, 'MM')");
+  s = s.replace(/strftime\s*\(\s*'%d'\s*,\s*([\w.]+)\s*\)/gi, "TO_CHAR($1::date, 'DD')");
 
-  const boolEq = [
-    ["active", "1", "TRUE"],
-    ["active", "0", "FALSE"],
-    ["read", "1", "TRUE"],
-    ["read", "0", "FALSE"],
-    ["used", "1", "TRUE"],
-    ["used", "0", "FALSE"],
-    ["broadcast", "1", "TRUE"],
-    ["broadcast", "0", "FALSE"],
-    ["pinned", "1", "TRUE"],
-    ["pinned", "0", "FALSE"],
-    ["is_private", "1", "TRUE"],
-    ["is_private", "0", "FALSE"],
-    ["notified", "1", "TRUE"],
-    ["notified", "0", "FALSE"],
-    ["is_newcomer", "1", "TRUE"],
-    ["is_newcomer", "0", "FALSE"],
-  ];
-  for (const [col, val, repl] of boolEq) {
-    s = s.replace(new RegExp(`\\b${col}\\s*=\\s*${val}\\b`, "gi"), `${col} = ${repl}`);
-  }
+  // Keep 0/1 integer comparisons — app schema uses INTEGER flags on Postgres (not BOOLEAN).
 
   return convertPlaceholders(s);
 }

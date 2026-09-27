@@ -1,34 +1,98 @@
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import pg from "pg";
 import { toPostgresSql } from "./sql-dialect.js";
-import { resolveDatabaseUrl } from "./supabase-db-url.js";
+import {
+  buildSupabaseDirectUrl,
+  buildSupabasePoolerUrlCandidates,
+  resolveDatabaseUrl,
+} from "./supabase-db-url.js";
+import { alignPostgresSchema } from "./pg-align.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let pool;
 
 function getPool() {
   if (!pool) {
-    const connectionString = resolveDatabaseUrl();
-    if (!connectionString) {
-      throw new Error(
-        "Supabase database not configured. Set DATABASE_URL or SUPABASE_DB_PASSWORD + SUPABASE_PROJECT_REF (and USE_SUPABASE_DB=true)."
-      );
-    }
-    pool = new pg.Pool({
-      connectionString,
-      ssl: connectionString.includes("localhost") ? false : { rejectUnauthorized: false },
-      max: 10,
-    });
+    throw new Error("Postgres pool not initialized. Call initPostgres() first.");
   }
   return pool;
 }
 
-export async function initPostgres() {
-  const client = await getPool().connect();
-  try {
-    await client.query("SELECT 1");
-    console.log("Supabase Postgres database ready.");
-  } finally {
-    client.release();
+async function tryPool(connectionString) {
+  pool = new pg.Pool({
+    connectionString,
+    ssl: connectionString.includes("localhost") ? false : { rejectUnauthorized: false },
+    max: 10,
+  });
+  const client = await pool.connect();
+  await client.query("SELECT 1");
+  client.release();
+}
+
+async function connectWithFallback() {
+  const candidates = [];
+  const primary = resolveDatabaseUrl();
+  if (primary) candidates.push(primary);
+
+  const password = process.env.SUPABASE_DB_PASSWORD?.trim();
+  const projectRef =
+    process.env.SUPABASE_PROJECT_REF?.trim() ||
+    (process.env.SUPABASE_URL || "").match(/https:\/\/([a-z0-9]+)\.supabase\.co/i)?.[1];
+  if (password && projectRef) {
+    for (const url of buildSupabasePoolerUrlCandidates({ projectRef, password, region: process.env.SUPABASE_DB_REGION })) {
+      if (!candidates.includes(url)) candidates.push(url);
+    }
+    if (process.env.USE_SUPABASE_DB_DIRECT === "true") {
+      const direct = buildSupabaseDirectUrl({ projectRef, password });
+      if (direct && !candidates.includes(direct)) candidates.push(direct);
+    }
   }
+
+  if (!candidates.length) {
+    throw new Error("Supabase database URL could not be resolved from environment.");
+  }
+
+  let lastError;
+  for (const connectionString of candidates) {
+    try {
+      if (pool) {
+        await pool.end().catch(() => {});
+        pool = null;
+      }
+      await tryPool(connectionString);
+      if (connectionString !== primary) {
+        console.warn("Connected to Supabase Postgres using a fallback connection string.");
+      }
+      return;
+    } catch (err) {
+      lastError = err;
+      if (pool) {
+        await pool.end().catch(() => {});
+        pool = null;
+      }
+    }
+  }
+  throw lastError;
+}
+
+async function ensurePostgresSchema() {
+  const p = getPool();
+  const exists = await p.query("SELECT to_regclass('public.events') AS reg");
+  if (exists.rows[0]?.reg) return;
+  const schemaPath = path.join(__dirname, "schema.postgres.sql");
+  const sql = fs.readFileSync(schemaPath, "utf8");
+  await p.query(sql);
+  console.log("Applied Postgres schema (schema.postgres.sql).");
+}
+
+export async function initPostgres() {
+  if (!pool) await connectWithFallback();
+  await ensurePostgresSchema();
+  await alignPostgresSchema(pool);
+  console.log("Supabase Postgres database ready.");
 }
 
 export function getPgDb() {

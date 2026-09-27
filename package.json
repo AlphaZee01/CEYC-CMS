@@ -9,11 +9,14 @@
   "scripts": {
     "dev": "concurrently -n client,server -c blue,green \"npm run dev:client\" \"npm run dev:server\"",
     "dev:client": "vite",
+    "dev:clean": "node scripts/clean-vite-cache.mjs && npm run dev",
     "dev:server": "node --watch server/index.js",
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "start": "node server/index.js",
     "db:reset": "node server/seed.js --reset",
+    "db:seed": "node server/seed.js",
+    "db:test:pg": "node scripts/test-supabase-connection.mjs",
     "auth:sync": "node scripts/sync-supabase-auth.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -52,7 +55,6 @@
     "@supabase/supabase-js": "^2.106.1",
     "@tanstack/react-query": "^5.83.0",
     "bcryptjs": "^2.4.3",
-    "better-sqlite3": "^12.10.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -77,6 +79,7 @@
     "react-resizable-panels": "^2.1.9",
     "react-router-dom": "^6.30.1",
     "recharts": "^2.15.4",
+    "serverless-http": "^4.0.0",
     "sonner": "^1.7.4",
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",
@@ -113,5 +116,10 @@
     "vite": "^5.4.19",
     "vite-plugin-pwa": "^0.21.1",
     "vitest": "^3.2.4"
+  },
+  "allowScripts": {
+    "@swc/core@1.13.2": true,
+    "esbuild@0.21.5": true,
+    "esbuild@0.25.0": true
   }
 }

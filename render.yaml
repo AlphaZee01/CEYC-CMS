@@ -17,6 +17,15 @@ services:
         value: Christ Embassy LCM
       - key: JWT_SECRET
         generateValue: true
+      # Required — Supabase Postgres (set in Render dashboard)
+      - key: USE_SUPABASE_DB
+        sync: false
+      - key: SUPABASE_DB_PASSWORD
+        sync: false
+      - key: SUPABASE_PROJECT_REF
+        sync: false
+      - key: SUPABASE_DB_REGION
+        sync: false
       # Optional — set in Render dashboard if using Supabase Auth
       - key: USE_SUPABASE_AUTH
         sync: false

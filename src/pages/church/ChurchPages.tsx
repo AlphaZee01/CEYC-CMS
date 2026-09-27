@@ -1934,9 +1934,12 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
 export function DepartmentsPage({ members, departments: propDepts, currentUser, onRefresh }: PageProps) {
   const { refresh: refreshAuth } = useAuth();
   const [departments, setDepartments] = useState(propDepts);
-  const [modal, setModal] = useState<"new" | "edit" | null>(null);
+  const [modal, setModal] = useState<"new" | null>(null);
+  const [viewDept, setViewDept] = useState<Department | null>(null);
+  const [deptModalTab, setDeptModalTab] = useState<"details" | "settings">("details");
   const [deleteTarget, setDeleteTarget] = useState<Department | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState({ name: "", headId: "", memberIds: [] as string[], abilities: [] as string[] });
   const canManage = canManageDepartments(currentUser.role);
@@ -1958,6 +1961,24 @@ export function DepartmentsPage({ members, departments: propDepts, currentUser, 
 
   useEffect(() => { load(); }, [load]);
 
+  const openDepartmentDetail = (d: Department, tab: "details" | "settings" = "details") => {
+    setEditId(d.id);
+    setForm({
+      name: d.name,
+      headId: d.headId || "",
+      memberIds: d.memberIds,
+      abilities: d.abilities || [],
+    });
+    setDeptModalTab(tab);
+    setViewDept(d);
+  };
+
+  const closeDepartmentDetail = () => {
+    setViewDept(null);
+    setEditId(null);
+    setDeptModalTab("details");
+  };
+
   const save = async () => {
     if (!form.name) return;
     const payload = {
@@ -1966,27 +1987,35 @@ export function DepartmentsPage({ members, departments: propDepts, currentUser, 
       memberIds: form.memberIds,
       abilities: form.abilities,
     };
-    if (modal === "new") {
-      await api("/departments", { method: "POST", body: JSON.stringify(payload) });
-    } else if (editId) {
-      await api(`/departments/${editId}`, { method: "PUT", body: JSON.stringify(payload) });
+    setSaving(true);
+    try {
+      if (modal === "new") {
+        await api("/departments", { method: "POST", body: JSON.stringify(payload) });
+        setModal(null);
+        setEditId(null);
+      } else if (editId) {
+        const updated = await api<Department>(`/departments/${editId}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        setViewDept(updated);
+        setForm({
+          name: updated.name,
+          headId: updated.headId || "",
+          memberIds: updated.memberIds,
+          abilities: updated.abilities || [],
+        });
+        toast.success("Department saved");
+      }
+      const list = await api<Department[]>("/departments");
+      setDepartments(list);
+      onRefresh();
+      await refreshAuth();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save department");
+    } finally {
+      setSaving(false);
     }
-    setModal(null);
-    setEditId(null);
-    load();
-    onRefresh();
-    await refreshAuth();
-  };
-
-  const openEdit = (d: Department) => {
-    setEditId(d.id);
-    setForm({
-      name: d.name,
-      headId: d.headId || "",
-      memberIds: d.memberIds,
-      abilities: d.abilities || [],
-    });
-    setModal("edit");
   };
 
   const confirmDeleteDepartment = async () => {
@@ -1994,6 +2023,7 @@ export function DepartmentsPage({ members, departments: propDepts, currentUser, 
     setDeleting(true);
     try {
       await api(`/departments/${deleteTarget.id}`, { method: "DELETE" });
+      if (viewDept?.id === deleteTarget.id) closeDepartmentDetail();
       setDeleteTarget(null);
       load();
       onRefresh();
@@ -2026,20 +2056,54 @@ export function DepartmentsPage({ members, departments: propDepts, currentUser, 
           ) : undefined
         }
       />
+      {departments.length > 0 && (
+        <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {departments.map((d) => (
+            <button
+              key={d.id}
+              type="button"
+              onClick={() => openDepartmentDetail(d)}
+              className={cn(
+                "shrink-0 rounded-xl border px-4 py-2 text-sm font-medium transition",
+                viewDept?.id === d.id
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border bg-card text-muted-foreground hover:border-primary/30 hover:text-foreground"
+              )}
+            >
+              {d.name}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="grid gap-4 md:grid-cols-2">
         {departments.map((d) => (
-          <Card key={d.id}>
+          <Card
+            key={d.id}
+            className="cursor-pointer transition hover:border-primary/40 hover:shadow-sm"
+            onClick={() => openDepartmentDetail(d)}
+          >
             <div className="flex justify-between gap-2">
               <h3 className="font-semibold">{d.name}</h3>
               {canManage && (
                 <div className="flex shrink-0 items-center gap-1">
-                  <button type="button" className="rounded p-1 hover:bg-muted" onClick={() => openEdit(d)} aria-label={`Edit ${d.name}`}>
+                  <button
+                    type="button"
+                    className="rounded p-1 hover:bg-muted"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openDepartmentDetail(d, "settings");
+                    }}
+                    aria-label={`Edit ${d.name}`}
+                  >
                     <Edit className="h-4 w-4" />
                   </button>
                   <button
                     type="button"
                     className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive"
-                    onClick={() => setDeleteTarget(d)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteTarget(d);
+                    }}
                     aria-label={`Delete ${d.name}`}
                   >
                     <Trash2 className="h-4 w-4" />
@@ -2070,18 +2134,151 @@ export function DepartmentsPage({ members, departments: propDepts, currentUser, 
           </Card>
         ))}
       </div>
-      <Modal open={!!modal} onClose={() => setModal(null)} title={modal === "new" ? "New Department" : "Edit Department"}>
+      <Modal open={!!viewDept} onClose={closeDepartmentDetail} title={viewDept?.name ?? "Department"}>
+        {viewDept && (
+          <div className="space-y-4">
+            <TabBar
+              tabs={[
+                { id: "details", label: "Details" },
+                { id: "settings", label: "Settings" },
+              ]}
+              value={deptModalTab}
+              onChange={setDeptModalTab}
+            />
+            {deptModalTab === "details" && (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-border bg-muted/30 p-4">
+                  <p className="text-sm text-muted-foreground">Department head</p>
+                  <p className="mt-1 font-medium">
+                    <MemberNameLink members={members} id={viewDept.headId} className="inline font-medium" />
+                  </p>
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    {viewDept.memberIds.length + (viewDept.headId ? 1 : 0)} serving members
+                  </p>
+                </div>
+                {viewDept.abilities && viewDept.abilities.length > 0 && (
+                  <div>
+                    <p className="mb-2 text-sm font-medium text-muted-foreground">Permissions for all members</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {viewDept.abilities.map((a) => (
+                        <Badge key={a} color="teal">
+                          {ABILITY_LABELS[a as DepartmentAbility] || a}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div>
+                  <p className="mb-2 text-sm font-medium text-muted-foreground">Serving members</p>
+                  <ul className="max-h-52 space-y-1 overflow-y-auto rounded-lg border border-border p-3 text-sm">
+                    {viewDept.headId && (
+                      <li className="flex items-center justify-between gap-2 border-b border-border pb-2">
+                        <MemberNameLink members={members} id={viewDept.headId} className="font-medium" />
+                        <Badge color="orange">Head</Badge>
+                      </li>
+                    )}
+                    {viewDept.memberIds.length === 0 && !viewDept.headId && (
+                      <li className="text-muted-foreground">No members assigned yet.</li>
+                    )}
+                    {viewDept.memberIds.map((mid) => (
+                      <li key={mid}>
+                        <MemberNameLink members={members} id={mid} className="font-normal" />
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                {canManage && (
+                  <Btn variant="secondary" className="w-full sm:w-auto" onClick={() => setDeptModalTab("settings")}>
+                    Edit settings
+                  </Btn>
+                )}
+              </div>
+            )}
+            {deptModalTab === "settings" && (
+              <div className="space-y-3">
+                <Input
+                  label="Name"
+                  value={form.name}
+                  onChange={(v) => setForm((f) => ({ ...f, name: v }))}
+                  disabled={!canManage}
+                />
+                {canManage && (
+                  <Btn
+                    variant="secondary"
+                    className="w-full sm:w-auto"
+                    onClick={() => setForm((f) => ({ ...f, abilities: getPresetAbilitiesForName(f.name) }))}
+                  >
+                    Apply preset abilities from name
+                  </Btn>
+                )}
+                <fieldset className="rounded-xl border border-border p-3">
+                  <legend className="px-1 text-sm font-medium">Department abilities (all members)</legend>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    {DEPARTMENT_ABILITIES.map((key) => (
+                      <label key={key} className="flex items-start gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={form.abilities.includes(key)}
+                          onChange={() => toggleAbility(key)}
+                          disabled={!canManage}
+                        />
+                        <span>{ABILITY_LABELS[key]}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <Select
+                  label="Head"
+                  value={form.headId}
+                  onChange={(v) => setForm((f) => ({ ...f, headId: v }))}
+                  options={[{ value: "", label: "Unassigned" }, ...members.map((m) => ({ value: m.id, label: m.name }))]}
+                  disabled={!canManage}
+                />
+                <label className="block text-sm font-medium">Members</label>
+                <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border p-2">
+                  {members.filter((m) => m.active).map((m) => (
+                    <label key={m.id} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={form.memberIds.includes(m.id)}
+                        disabled={!canManage}
+                        onChange={(e) => {
+                          setForm((f) => ({
+                            ...f,
+                            memberIds: e.target.checked
+                              ? [...f.memberIds, m.id]
+                              : f.memberIds.filter((id) => id !== m.id),
+                          }));
+                        }}
+                      />
+                      {m.name}
+                    </label>
+                  ))}
+                </div>
+                {canManage ? (
+                  <ModalFooter>
+                    <Btn variant="ghost" onClick={closeDepartmentDetail}>Close</Btn>
+                    <Btn onClick={save} disabled={saving}>{saving ? "Saving…" : "Save changes"}</Btn>
+                  </ModalFooter>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Only leaders with department management access can change settings.</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+      <Modal open={modal === "new"} onClose={() => setModal(null)} title="New Department">
         <div className="space-y-3">
           <Input label="Name" value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} />
-          {canManage && (
-            <Btn
-              variant="secondary"
-              className="w-full sm:w-auto"
-              onClick={() => setForm((f) => ({ ...f, abilities: getPresetAbilitiesForName(f.name) }))}
-            >
-              Apply preset abilities from name
-            </Btn>
-          )}
+          <Btn
+            variant="secondary"
+            className="w-full sm:w-auto"
+            onClick={() => setForm((f) => ({ ...f, abilities: getPresetAbilitiesForName(f.name) }))}
+          >
+            Apply preset abilities from name
+          </Btn>
           <fieldset className="rounded-xl border border-border p-3">
             <legend className="px-1 text-sm font-medium">Department abilities (all members)</legend>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
@@ -2092,7 +2289,6 @@ export function DepartmentsPage({ members, departments: propDepts, currentUser, 
                     className="mt-0.5"
                     checked={form.abilities.includes(key)}
                     onChange={() => toggleAbility(key)}
-                    disabled={!canManage}
                   />
                   <span>{ABILITY_LABELS[key]}</span>
                 </label>
@@ -2114,7 +2310,10 @@ export function DepartmentsPage({ members, departments: propDepts, currentUser, 
               </label>
             ))}
           </div>
-          <Btn onClick={save}>Save</Btn>
+          <ModalFooter>
+            <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn onClick={save} disabled={saving}>{saving ? "Creating…" : "Create department"}</Btn>
+          </ModalFooter>
         </div>
       </Modal>
       <Modal open={!!deleteTarget} onClose={() => !deleting && setDeleteTarget(null)} title="Delete department?">
@@ -2476,6 +2675,8 @@ interface EventProgrammeItem {
   assigneeIds: string[];
 }
 
+type EventHostScope = "church" | "fellowship" | "cell";
+
 interface ChurchEvent {
   id: string;
   title: string;
@@ -2483,11 +2684,25 @@ interface ChurchEvent {
   time: string;
   location: string;
   description: string;
+  hostScope?: EventHostScope;
+  fellowshipId?: string | null;
+  cellId?: string | null;
   rsvpIds: string[];
   programme: EventProgrammeItem[];
   programmeStatus: "none" | "draft" | "confirmed";
   programmeConfirmedAt: string | null;
   programmeConfirmedBy: string | null;
+}
+
+function eventHostLabel(e: ChurchEvent, cells: Cell[], fellowships: Fellowship[]) {
+  const scope = e.hostScope || (e.cellId ? "cell" : e.fellowshipId ? "fellowship" : "church");
+  if (scope === "cell" && e.cellId) {
+    return cells.find((c) => c.id === e.cellId)?.name || "Cell event";
+  }
+  if (scope === "fellowship" && e.fellowshipId) {
+    return fellowships.find((f) => f.id === e.fellowshipId)?.name || "Fellowship event";
+  }
+  return "Whole church";
 }
 
 interface ProgrammeDraft {
@@ -2502,7 +2717,7 @@ function newProgrammeDraft(): ProgrammeDraft {
   return { key: crypto.randomUUID(), title: "", description: "", scheduledTime: "", assigneeIds: [] };
 }
 
-export function EventsPage({ members, currentUser, onRefresh }: PageProps) {
+export function EventsPage({ members, cells, fellowships, currentUser, onRefresh }: PageProps) {
   const { departmentAbilities } = useAuth();
   const canCreateEvents = canManageEventsForUser(currentUser.role, departmentAbilities);
   const canConfirmProgramme = canConfirmEventProgramme(currentUser.role);
@@ -2511,7 +2726,16 @@ export function EventsPage({ members, currentUser, onRefresh }: PageProps) {
   const [modal, setModal] = useState(false);
   const [createStep, setCreateStep] = useState<"details" | "programme">("details");
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ title: "", date: "", time: "", location: "", description: "" });
+  const [form, setForm] = useState({
+    title: "",
+    date: "",
+    time: "",
+    location: "",
+    description: "",
+    hostScope: "church" as EventHostScope,
+    fellowshipId: "",
+    cellId: "",
+  });
   const [programmeDraft, setProgrammeDraft] = useState<ProgrammeDraft[]>([]);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
 
@@ -2521,7 +2745,16 @@ export function EventsPage({ members, currentUser, onRefresh }: PageProps) {
 
   const resetCreateFlow = () => {
     setCreateStep("details");
-    setForm({ title: "", date: "", time: "", location: "", description: "" });
+    setForm({
+      title: "",
+      date: "",
+      time: "",
+      location: "",
+      description: "",
+      hostScope: "church",
+      fellowshipId: "",
+      cellId: "",
+    });
     setProgrammeDraft([]);
   };
 
@@ -2536,6 +2769,14 @@ export function EventsPage({ members, currentUser, onRefresh }: PageProps) {
   const goToProgrammeStep = () => {
     if (!form.title.trim() || !form.date) {
       alert("Title and date are required");
+      return;
+    }
+    if (form.hostScope === "fellowship" && !form.fellowshipId) {
+      alert("Select which fellowship is hosting this event");
+      return;
+    }
+    if (form.hostScope === "cell" && !form.cellId) {
+      alert("Select which cell is hosting this event");
       return;
     }
     setCreateStep("programme");
@@ -2628,6 +2869,7 @@ export function EventsPage({ members, currentUser, onRefresh }: PageProps) {
                 <div key={e.id} className="rounded-lg bg-primary/5 p-2 text-sm">
                   <p className="font-medium">{e.title}</p>
                   <p className="text-xs text-muted-foreground">{e.time}</p>
+                  <Badge color="teal" className="mt-1 text-[10px]">{eventHostLabel(e, cells, fellowships)}</Badge>
                 </div>
               ))}
           </div>
@@ -2639,7 +2881,10 @@ export function EventsPage({ members, currentUser, onRefresh }: PageProps) {
             <Card key={e.id}>
               <div className="flex flex-wrap justify-between gap-2">
                 <div>
-                  <h3 className="font-semibold">{e.title}</h3>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-semibold">{e.title}</h3>
+                    <Badge color="teal">{eventHostLabel(e, cells, fellowships)}</Badge>
+                  </div>
                   <p className="text-sm text-muted-foreground">{e.date} at {e.time} · {e.location}</p>
                   <p className="mt-2 text-sm">{e.description}</p>
                   {e.programme?.length > 0 && (
@@ -2727,6 +2972,46 @@ export function EventsPage({ members, currentUser, onRefresh }: PageProps) {
             <Input label="Date" type="date" value={form.date} onChange={(v) => setForm((f) => ({ ...f, date: v }))} />
             <Input label="Time" value={form.time} onChange={(v) => setForm((f) => ({ ...f, time: v }))} placeholder="e.g. 10:00 AM" />
             <Input label="Location" value={form.location} onChange={(v) => setForm((f) => ({ ...f, location: v }))} />
+            <Select
+              label="Hosted by"
+              value={form.hostScope}
+              onChange={(v) =>
+                setForm((f) => ({
+                  ...f,
+                  hostScope: v as EventHostScope,
+                  fellowshipId: v === "fellowship" ? f.fellowshipId : "",
+                  cellId: v === "cell" ? f.cellId : "",
+                }))
+              }
+              options={[
+                { value: "church", label: "Whole church" },
+                { value: "fellowship", label: "Fellowship" },
+                { value: "cell", label: "Cell" },
+              ]}
+            />
+            {form.hostScope === "fellowship" && (
+              <Select
+                label="Fellowship"
+                value={form.fellowshipId}
+                onChange={(v) => setForm((f) => ({ ...f, fellowshipId: v }))}
+                options={fellowships.map((f) => ({ value: f.id, label: f.name }))}
+              />
+            )}
+            {form.hostScope === "cell" && (
+              <Select
+                label="Cell"
+                value={form.cellId}
+                onChange={(v) => {
+                  const cell = cells.find((c) => c.id === v);
+                  setForm((f) => ({
+                    ...f,
+                    cellId: v,
+                    fellowshipId: cell?.fellowshipId || f.fellowshipId,
+                  }));
+                }}
+                options={cells.map((c) => ({ value: c.id, label: c.name }))}
+              />
+            )}
             <Textarea label="Description" value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
             <ModalFooter>
               <Btn variant="ghost" onClick={() => { setModal(false); resetCreateFlow(); }}>

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -44,9 +44,13 @@ export function IconBox({
 const fieldClass =
   "w-full min-h-[44px] rounded-xl border border-input bg-background px-3.5 py-2.5 text-base shadow-sm transition placeholder:text-muted-foreground/70 focus:border-primary/40 focus:outline-none focus:ring-2 focus:ring-primary/20 sm:text-sm";
 
-export function Card({ children, className }: { children: ReactNode; className?: string }) {
+export function Card({
+  children,
+  className,
+  ...props
+}: ComponentPropsWithoutRef<"div"> & { children: ReactNode }) {
   return (
-    <div className={cn("surface-card p-4 sm:p-5", className)}>
+    <div className={cn("surface-card p-4 sm:p-5", className)} {...props}>
       {children}
     </div>
   );
@@ -174,11 +178,11 @@ export function Input({ label, value, onChange, type = "text", placeholder, clas
   );
 }
 
-export function Select({ label, value, onChange, options }: { label?: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
+export function Select({ label, value, onChange, options, disabled }: { label?: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; disabled?: boolean }) {
   return (
     <label className="block">
       {label && <span className="mb-2 block text-sm font-medium text-foreground">{label}</span>}
-      <select value={value} onChange={(e) => onChange(e.target.value)} className={fieldClass}>
+      <select value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} className={cn(fieldClass, disabled && "cursor-not-allowed opacity-60")}>
         {options.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label}

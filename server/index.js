@@ -6,7 +6,6 @@ import fs from "fs";
 import multer from "multer";
 import { fileURLToPath } from "url";
 import { getDb, initDatabase } from "./store.js";
-import { useSupabaseDatabase } from "./sql-dialect.js";
 import { memberToJson, logActivity, notifyMember } from "./db.js";
 import { authMiddleware, loginUser, requirePage, requireMembersPageOrSelf } from "./auth.js";
 import {
@@ -59,45 +58,107 @@ import { isGoogleDriveUrl, normalizeGoogleDriveUrl } from "./media-url.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
-const UPLOAD_DIR = path.join(__dirname, "..", "uploads");
+const UPLOAD_DIR = process.env.VERCEL
+  ? path.join("/tmp", "celcm-uploads")
+  : path.join(__dirname, "..", "uploads");
 
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-await initDatabase();
-await seedDatabase(false);
-await ensureDashboardSamples(getDb());
-try {
-  await ensureNewcomerSampleData(getDb());
-} catch (err) {
-  console.warn("Newcomer sample data skipped:", err.message);
-}
-try {
-  await ensureBirthdayData(getDb());
-} catch (err) {
-  console.warn("Birthday sample data skipped:", err.message);
-}
-if (useSupabaseAuth()) {
-  try {
-    await syncAuthUsers();
-  } catch (err) {
-    console.warn("Auth sync skipped:", err.message);
-  }
-  console.log("Supabase Auth enabled.");
-}
-
-const app = express();
+export const app = express();
 if (process.env.NODE_ENV === "production") {
   app.set("trust proxy", 1);
 }
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
+let databaseReady = false;
+let databaseError = null;
+
+export async function bootstrapDatabase() {
+  try {
+    await initDatabase();
+    await seedDatabase(false);
+    await ensureDashboardSamples(getDb());
+    try {
+      await ensureNewcomerSampleData(getDb());
+    } catch (err) {
+      console.warn("Newcomer sample data skipped:", err.message);
+    }
+    try {
+      await ensureBirthdayData(getDb());
+    } catch (err) {
+      console.warn("Birthday sample data skipped:", err.message);
+    }
+    if (useSupabaseAuth()) {
+      try {
+        await syncAuthUsers();
+      } catch (err) {
+        console.warn("Auth sync skipped:", err.message);
+      }
+      console.log("Supabase Auth enabled.");
+    }
+    databaseReady = true;
+    if (!process.env.VERCEL) {
+      startJobs();
+    } else {
+      console.log("Background jobs disabled on Vercel (use a cron or external worker for overdue reports).");
+    }
+    console.log("Database ready.");
+  } catch (err) {
+    databaseError = err instanceof Error ? err.message : String(err);
+    console.error("Database startup failed:", databaseError);
+    console.error(
+      "Configure Supabase Postgres in .env (USE_SUPABASE_DB=true, SUPABASE_DB_PASSWORD, SUPABASE_PROJECT_REF, SUPABASE_DB_REGION, or DATABASE_URL) and restart the API."
+    );
+  }
+}
+
 app.get("/api/health", (_req, res) => {
   res.json({
-    ok: true,
-    database: useSupabaseDatabase() ? "supabase" : "sqlite",
+    ok: databaseReady,
+    database: databaseReady ? "supabase" : "unavailable",
     storage: process.env.USE_SUPABASE_STORAGE === "true" ? "supabase" : "local",
+    ...(databaseError ? { error: databaseError } : {}),
   });
+});
+
+app.get("/api/public/config", (_req, res) => {
+  try {
+    res.json({ authMode: useSupabaseAuth() ? "supabase" : "jwt" });
+  } catch (err) {
+    console.error("public/config error:", err);
+    res.json({ authMode: "jwt" });
+  }
+});
+
+app.get("/api/public/branding", async (req, res) => {
+  try {
+    if (!databaseReady) {
+      const fallback = process.env.CHURCH_NAME
+        ? { name: process.env.CHURCH_NAME, tagline: null, logo_url: null }
+        : null;
+      return res.json(brandingFromSettings(fallback, req));
+    }
+    const s = await getDb().prepare("SELECT name, tagline, logo_url FROM church_settings WHERE id = 1").get();
+    res.json(brandingFromSettings(s, req));
+  } catch (err) {
+    console.error("public/branding error:", err);
+    res.json(brandingFromSettings(null, req));
+  }
+});
+
+app.use((req, res, next) => {
+  if (
+    !databaseReady &&
+    req.path.startsWith("/api/") &&
+    req.path !== "/api/health" &&
+    !req.path.startsWith("/api/public/")
+  ) {
+    return res.status(503).json({
+      error: databaseError || "Database unavailable. Check API server logs and .env database settings.",
+    });
+  }
+  next();
 });
 
 const authLimiter = (await import("express-rate-limit")).default({
@@ -148,33 +209,22 @@ async function loadMember(db, id) {
 
 // ─── Public (no auth) ────────────────────────────────────────────────────────
 
-app.get("/api/public/branding", async (req, res) => {
-  try {
-    const s = await getDb().prepare("SELECT name, tagline, logo_url FROM church_settings WHERE id = 1").get();
-    res.json(brandingFromSettings(s, req));
-  } catch (err) {
-    console.error("public/branding error:", err);
-    res.status(500).json({ error: "Failed to load branding" });
-  }
-});
-
 app.get("/manifest.webmanifest", async (req, res) => {
   try {
+    const fallback = process.env.CHURCH_NAME
+      ? { name: process.env.CHURCH_NAME, tagline: null, logo_url: null }
+      : null;
+    if (!databaseReady) {
+      res.type("application/manifest+json");
+      return res.json(buildWebAppManifest(fallback, req));
+    }
     const s = await getDb().prepare("SELECT name, tagline, logo_url FROM church_settings WHERE id = 1").get();
     res.type("application/manifest+json");
     res.json(buildWebAppManifest(s, req));
   } catch (err) {
     console.error("manifest.webmanifest error:", err);
-    res.status(500).json({ error: "Failed to load manifest" });
-  }
-});
-
-app.get("/api/public/config", (_req, res) => {
-  try {
-    res.json({ authMode: useSupabaseAuth() ? "supabase" : "jwt" });
-  } catch (err) {
-    console.error("public/config error:", err);
-    res.status(500).json({ error: "Failed to load config" });
+    res.type("application/manifest+json");
+    res.json(buildWebAppManifest(null, req));
   }
 });
 
@@ -923,6 +973,7 @@ async function loadEventProgramme(db, eventId) {
 }
 
 app.get("/api/events", authMiddleware, requirePage("events"), async (req, res) => {
+  try {
   const db = getDb();
   const events = await db.prepare("SELECT * FROM events ORDER BY date").all();
   res.json(
@@ -940,6 +991,9 @@ app.get("/api/events", authMiddleware, requirePage("events"), async (req, res) =
         ) {
           programmeStatus = "draft";
         }
+        const cellId = e.cell_id || null;
+        const fellowshipId = e.fellowship_id || null;
+        const hostScope = cellId ? "cell" : fellowshipId ? "fellowship" : "church";
         return {
           id: e.id,
           title: e.title,
@@ -948,6 +1002,9 @@ app.get("/api/events", authMiddleware, requirePage("events"), async (req, res) =
           location: e.location,
           departmentId: e.department_id,
           description: e.description,
+          hostScope,
+          fellowshipId,
+          cellId,
           rsvpIds: rsvps.map((r) => r.member_id),
           programme,
           programmeStatus,
@@ -957,6 +1014,10 @@ app.get("/api/events", authMiddleware, requirePage("events"), async (req, res) =
       })
     )
   );
+  } catch (err) {
+    console.error("GET /api/events error:", err);
+    res.status(500).json({ error: err.message || "Failed to load events" });
+  }
 });
 
 app.post("/api/events", authMiddleware, requirePage("events"), async (req, res) => {
@@ -964,14 +1025,57 @@ app.post("/api/events", authMiddleware, requirePage("events"), async (req, res) 
     return res.status(403).json({ error: "You cannot create church events" });
   }
   const db = getDb();
-  const { title, date, time, location, departmentId, description } = req.body;
+  const { title, date, time, location, departmentId, description, hostScope, fellowshipId, cellId } = req.body;
+  let resolvedFellowshipId = null;
+  let resolvedCellId = null;
+  if (hostScope === "fellowship") {
+    if (!fellowshipId) {
+      return res.status(400).json({ error: "Select a fellowship for this event" });
+    }
+    resolvedFellowshipId = fellowshipId;
+  } else if (hostScope === "cell") {
+    if (!cellId) {
+      return res.status(400).json({ error: "Select a cell for this event" });
+    }
+    const cell = await db.prepare("SELECT fellowship_id FROM cells WHERE id = ?").get(cellId);
+    if (!cell) {
+      return res.status(400).json({ error: "Invalid cell" });
+    }
+    resolvedCellId = cellId;
+    resolvedFellowshipId = cell.fellowship_id || fellowshipId || null;
+  }
   const id = uid();
   await db.prepare(
-    `INSERT INTO events (id, title, date, time, location, department_id, description, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, title, date, time, location, departmentId || null, description, req.user.member.id);
+    `INSERT INTO events (id, title, date, time, location, department_id, description, fellowship_id, cell_id, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    title,
+    date,
+    time,
+    location,
+    departmentId || null,
+    description,
+    resolvedFellowshipId,
+    resolvedCellId,
+    req.user.member.id
+  );
   await logActivity(db, `Event created: ${title}`, req.user.member.id);
-  res.status(201).json({ id, title, date, time, location, departmentId, description, rsvpIds: [], programme: [] });
+  const responseHostScope = resolvedCellId ? "cell" : resolvedFellowshipId ? "fellowship" : "church";
+  res.status(201).json({
+    id,
+    title,
+    date,
+    time,
+    location,
+    departmentId,
+    description,
+    hostScope: responseHostScope,
+    fellowshipId: resolvedFellowshipId,
+    cellId: resolvedCellId,
+    rsvpIds: [],
+    programme: [],
+  });
 });
 
 app.put("/api/events/:id/programme", authMiddleware, requirePage("events"), async (req, res) => {
@@ -1603,6 +1707,7 @@ async function canActOnFollowUp(db, user, followUp) {
 }
 
 app.get("/api/follow-ups", authMiddleware, requirePage("discipleship"), async (req, res) => {
+  try {
   const db = getDb();
   const actor = req.user.member;
   const viewAll = canViewAllDiscipleshipClass(actor.role, req.user.departmentAbilities);
@@ -1625,7 +1730,7 @@ app.get("/api/follow-ups", authMiddleware, requirePage("discipleship"), async (r
         createdAt: fu.created_at,
         notes: await db
           .prepare(
-            "SELECT id, date, text, outcome, created_by FROM follow_up_notes WHERE follow_up_id = ? ORDER BY date DESC, rowid DESC"
+            "SELECT id, date, text, outcome, created_by FROM follow_up_notes WHERE follow_up_id = ? ORDER BY date DESC, id DESC"
           )
           .all(fu.id)
           .then((notes) =>
@@ -1640,6 +1745,10 @@ app.get("/api/follow-ups", authMiddleware, requirePage("discipleship"), async (r
       }))
     )
   );
+  } catch (err) {
+    console.error("GET /api/follow-ups error:", err);
+    res.status(500).json({ error: err.message || "Failed to load class records" });
+  }
 });
 
 app.post("/api/follow-ups", authMiddleware, requirePage("discipleship"), async (req, res) => {
@@ -2089,120 +2198,162 @@ app.patch("/api/tasks/:id", authMiddleware, requirePage("tasks"), async (req, re
 // ─── Media ─────────────────────────────────────────────────────────────────────
 
 app.get("/api/media/capabilities", authMiddleware, requirePage("media"), async (req, res) => {
-  const member = req.user.member;
-  const deptAbilities = req.user.departmentAbilities || [];
-  res.json({
-    canUpload: await canUploadMedia(getDb(), member, deptAbilities),
-    canApprove: canApproveMedia(member.role),
-    canViewPending: canViewAllMedia(member.role) || (await canUploadMedia(getDb(), member, deptAbilities)),
-  });
+  try {
+    const member = req.user.member;
+    const deptAbilities = req.user.departmentAbilities || [];
+    res.json({
+      canUpload: await canUploadMedia(getDb(), member, deptAbilities),
+      canApprove: canApproveMedia(member.role),
+      canViewPending: canViewAllMedia(member.role) || (await canUploadMedia(getDb(), member, deptAbilities)),
+    });
+  } catch (err) {
+    console.error("GET /api/media/capabilities error:", err);
+    res.status(500).json({ error: err.message || "Failed to load media permissions" });
+  }
 });
 
+function queryParam(value) {
+  if (value == null || value === "") return "";
+  return Array.isArray(value) ? String(value[0] ?? "") : String(value);
+}
+
+function mediaFileUrl(row) {
+  if (row.file_url) return row.file_url;
+  const localPath = row.file_path;
+  if (typeof localPath !== "string" || !localPath.trim()) return null;
+  return `/uploads/${path.basename(localPath)}`;
+}
+
 app.get("/api/media", authMiddleware, requirePage("media"), async (req, res) => {
-  const db = getDb();
-  const { search, type, series } = req.query;
-  const member = req.user.member;
-  let sql = "SELECT * FROM media_items WHERE 1=1";
-  const params = [];
-  const deptAbilities = req.user.departmentAbilities || [];
-  if (!canViewAllMedia(member.role) && !(await canUploadMedia(db, member, deptAbilities))) {
-    sql += " AND status = 'approved'";
+  try {
+    const db = getDb();
+    const search = queryParam(req.query.search);
+    const type = queryParam(req.query.type);
+    const series = queryParam(req.query.series);
+    const member = req.user.member;
+    let sql = "SELECT * FROM media_items WHERE 1=1";
+    const params = [];
+    const deptAbilities = req.user.departmentAbilities || [];
+    if (!canViewAllMedia(member.role) && !(await canUploadMedia(db, member, deptAbilities))) {
+      sql += " AND status = 'approved'";
+    }
+    if (search) {
+      sql += ` AND (title LIKE ? OR speaker LIKE ? OR topic LIKE ? OR series LIKE ?)`;
+      const q = `%${search}%`;
+      params.push(q, q, q, q);
+    }
+    if (type) {
+      sql += ` AND type = ?`;
+      params.push(type);
+    }
+    if (series) {
+      sql += ` AND series = ?`;
+      params.push(series);
+    }
+    sql += ` ORDER BY date DESC`;
+    const rows = await db.prepare(sql).all(...params);
+    res.json(
+      rows.map((m) => ({
+        id: m.id,
+        title: m.title,
+        type: m.type,
+        speaker: m.speaker,
+        series: m.series,
+        topic: m.topic,
+        date: m.date,
+        fileUrl: mediaFileUrl(m),
+        shareTarget: m.share_target,
+        shareTargetId: m.share_target_id,
+        status: m.status || "approved",
+      }))
+    );
+  } catch (err) {
+    console.error("GET /api/media error:", err);
+    res.status(500).json({ error: err.message || "Failed to load media library" });
   }
-  if (search) {
-    sql += ` AND (title LIKE ? OR speaker LIKE ? OR topic LIKE ? OR series LIKE ?)`;
-    const q = `%${search}%`;
-    params.push(q, q, q, q);
-  }
-  if (type) {
-    sql += ` AND type = ?`;
-    params.push(type);
-  }
-  if (series) {
-    sql += ` AND series = ?`;
-    params.push(series);
-  }
-  sql += " ORDER BY date DESC";
-  const rows = await db.prepare(sql).all(...params);
-  res.json(
-    rows.map((m) => ({
-      id: m.id,
-      title: m.title,
-      type: m.type,
-      speaker: m.speaker,
-      series: m.series,
-      topic: m.topic,
-      date: m.date,
-      fileUrl: m.file_url || (m.file_path ? `/uploads/${path.basename(m.file_path)}` : null),
-      shareTarget: m.share_target,
-      shareTargetId: m.share_target_id,
-      status: m.status || "approved",
-    }))
-  );
 });
 
 app.post("/api/media", authMiddleware, requirePage("media"), upload.single("file"), async (req, res) => {
-  if (!(await canUploadMedia(getDb(), req.user.member, req.user.departmentAbilities))) {
-    return res.status(403).json({ error: "Upload not permitted" });
-  }
-  const db = getDb();
-  const { title, type, speaker, series, topic, date, shareTarget, shareTargetId, fileUrl: bodyFileUrl, videoUrl } = req.body;
-  const id = uid();
-  const filePath = req.file?.path || null;
-  let fileUrl = null;
-  if (req.file) {
-    try {
+  try {
+    if (!(await canUploadMedia(getDb(), req.user.member, req.user.departmentAbilities))) {
+      return res.status(403).json({ error: "Upload not permitted" });
+    }
+    const db = getDb();
+    const { title, type, speaker, series, topic, date, shareTarget, shareTargetId, fileUrl: bodyFileUrl, videoUrl } =
+      req.body || {};
+    const titleText = String(title || "").trim();
+    const mediaType = String(type || "").trim();
+    if (!titleText) return res.status(400).json({ error: "Title is required" });
+    if (!["audio", "video", "notes", "slides"].includes(mediaType)) {
+      return res.status(400).json({ error: "Invalid media type" });
+    }
+
+    const id = uid();
+    const filePath = req.file?.path || null;
+    let fileUrl = null;
+    if (req.file) {
       fileUrl = await persistUploadedFile(
         req.file.path,
         "media",
         req.file.originalname,
         req.file.mimetype
       );
-    } catch (err) {
-      console.error("Media upload failed:", err.message);
-      return res.status(500).json({ error: "File upload failed" });
-    }
-  } else {
-    const external = String(bodyFileUrl || videoUrl || "").trim();
-    if (external) {
-      if (!isGoogleDriveUrl(external)) {
-        return res.status(400).json({ error: "Video link must be a Google Drive share URL" });
+    } else {
+      const external = String(bodyFileUrl || videoUrl || "").trim();
+      if (external) {
+        if (!isGoogleDriveUrl(external)) {
+          return res.status(400).json({ error: "Video link must be a Google Drive share URL" });
+        }
+        const normalized = normalizeGoogleDriveUrl(external);
+        if (!normalized) {
+          return res.status(400).json({ error: "Could not parse Google Drive link" });
+        }
+        fileUrl = normalized;
       }
-      const normalized = normalizeGoogleDriveUrl(external);
-      if (!normalized) {
-        return res.status(400).json({ error: "Could not parse Google Drive link" });
-      }
-      fileUrl = normalized;
     }
+    if (mediaType === "video" && !fileUrl) {
+      return res.status(400).json({ error: "Upload a video file or provide a Google Drive link" });
+    }
+    if (mediaType !== "video" && !fileUrl) {
+      return res.status(400).json({ error: "Choose a file to upload" });
+    }
+
+    const autoApprove = canApproveMedia(req.user.member.role);
+    const status = autoApprove ? "approved" : "pending";
+    const approvedBy = autoApprove ? req.user.member.id : null;
+    const approvedAt = autoApprove ? new Date().toISOString() : null;
+    const emptyToNull = (v) => (v == null || String(v).trim() === "" ? null : String(v).trim());
+
+    await db.prepare(
+      `INSERT INTO media_items (id, title, type, speaker, series, topic, date, file_path, file_url, share_target, share_target_id, uploaded_by, status, approved_by, approved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id,
+      titleText,
+      mediaType,
+      emptyToNull(speaker),
+      emptyToNull(series),
+      emptyToNull(topic),
+      emptyToNull(date) || new Date().toISOString().slice(0, 10),
+      filePath,
+      fileUrl,
+      emptyToNull(shareTarget),
+      emptyToNull(shareTargetId),
+      req.user.member.id,
+      status,
+      approvedBy,
+      approvedAt
+    );
+    try {
+      await logActivity(db, `Media uploaded: ${titleText}`, req.user.member.id);
+    } catch (logErr) {
+      console.warn("Media upload activity log skipped:", logErr.message);
+    }
+    res.status(201).json({ id, title: titleText, status });
+  } catch (err) {
+    console.error("POST /api/media error:", err);
+    res.status(500).json({ error: err.message || "Media upload failed" });
   }
-  if (type === "video" && !fileUrl) {
-    return res.status(400).json({ error: "Upload a video file or provide a Google Drive link" });
-  }
-  const autoApprove = canApproveMedia(req.user.member.role);
-  const status = autoApprove ? "approved" : "pending";
-  const approvedBy = autoApprove ? req.user.member.id : null;
-  const approvedAt = autoApprove ? new Date().toISOString() : null;
-  await db.prepare(
-    `INSERT INTO media_items (id, title, type, speaker, series, topic, date, file_path, file_url, share_target, share_target_id, uploaded_by, status, approved_by, approved_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    id,
-    title,
-    type,
-    speaker,
-    series,
-    topic,
-    date,
-    filePath,
-    fileUrl,
-    shareTarget || null,
-    shareTargetId || null,
-    req.user.member.id,
-    status,
-    approvedBy,
-    approvedAt
-  );
-  await logActivity(db, `Media uploaded: ${title}`, req.user.member.id);
-  res.status(201).json({ id, title, status });
 });
 
 app.patch("/api/media/:id", authMiddleware, requirePage("media"), async (req, res) => {
@@ -2399,7 +2550,7 @@ app.get("/api/settings", authMiddleware, requirePage("settings"), async (req, re
     email: s.email,
     logoUrl: branding.logoUrl,
     emailConfigured: isEmailConfigured(),
-    database: useSupabaseDatabase() ? "supabase" : "sqlite",
+    database: "supabase",
   });
 });
 
@@ -2836,7 +2987,6 @@ app.get("/api/dashboard/stats", authMiddleware, requirePage("dashboard"), async 
 });
 
 registerCompletionRoutes(app, { upload, uid, getMemberDepartments, loadMember, UPLOAD_DIR });
-startJobs();
 
 // ─── Production static ─────────────────────────────────────────────────────────
 
@@ -2849,15 +2999,18 @@ if (fs.existsSync(distPath)) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`Christ Embassy API running on http://localhost:${PORT}`);
-}).on("error", (err) => {
-  if (err.code === "EADDRINUSE") {
-    console.error(
-      `Port ${PORT} is already in use. Stop the other API process (or run: npx kill-port ${PORT}) and restart.`
-    );
-  } else {
-    console.error("API server failed to start:", err.message);
-  }
-  process.exit(1);
-});
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`Christ Embassy API running on http://localhost:${PORT}`);
+    void bootstrapDatabase();
+  }).on("error", (err) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(
+        `Port ${PORT} is already in use. Stop the other API process (or run: npx kill-port ${PORT}) and restart.`
+      );
+    } else {
+      console.error("API server failed to start:", err.message);
+    }
+    process.exit(1);
+  });
+}

@@ -22,7 +22,22 @@ export const supabase = supabaseConfigured
   : null;
 
 export function isRefreshTokenError(message?: string) {
-  return !!message && /refresh token/i.test(message);
+  return !!message && /refresh token|invalid refresh token/i.test(message);
+}
+
+/** Drop broken persisted Supabase sessions (e.g. after password reset or auth:sync). */
+export async function ensureValidSupabaseSession() {
+  if (!supabase) return;
+  const { data, error } = await supabase.auth.getSession();
+  if (error && isRefreshTokenError(error.message)) {
+    await clearStaleSupabaseSession();
+    return;
+  }
+  if (!data.session) return;
+  const { error: userError } = await supabase.auth.getUser();
+  if (userError && isRefreshTokenError(userError.message)) {
+    await clearStaleSupabaseSession();
+  }
 }
 
 /** Clear a revoked or expired Supabase session from local storage. */

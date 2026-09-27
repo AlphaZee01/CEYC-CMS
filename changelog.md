@@ -1,5 +1,131 @@
 # Changelog
 
+## [2026-09-27] — Vite outdated optimize deps
+
+### Fixed
+- **PWA in dev** — service worker is off during `npm run dev` (was caching Vite pre-bundles → 504 `Outdated Optimize Dep`). Set `VITE_PWA_DEV=true` only if you need to test install prompts locally.
+
+### Added
+- **`npm run dev:clean`** — clears `node_modules/.vite` and `dev-dist` then starts dev.
+
+## [2026-09-27] — API listens before DB bootstrap
+
+### Fixed
+- **Dev startup** — Express binds to port 3001 immediately; Supabase Postgres seed/init runs in the background so `/api/public/config` and `/api/public/branding` work while the DB is still connecting.
+- **Auth** — if `/api/public/config` fails briefly, the client falls back using `VITE_USE_SUPABASE_AUTH` (set alongside `USE_SUPABASE_AUTH=true`).
+
+## [2026-09-27] — Church media storage bucket
+
+### Added
+- **Supabase Storage** — `church-media` bucket (public, 100MB file limit) with the same RLS pattern as logos/avatars/banners. Migration: `20260927120000_church_media_bucket.sql`. Media uploads use this bucket when `USE_SUPABASE_STORAGE=true` (`SUPABASE_BUCKET_MEDIA=church-media`).
+
+## [2026-09-27] — Supabase Storage bucket mapping
+
+### Fixed
+- **Storage** — removed hard-coded `church-assets` bucket (auto-create). Uploads now target your existing buckets: **church logos**, **member avatars**, and **event banners** (auto-detected by name, or set `SUPABASE_BUCKET_*` in `.env`). **Media library** files (audio/video) stay on `/uploads` unless you create a media bucket and set `SUPABASE_BUCKET_MEDIA`.
+
+## [2026-09-27] — Media upload POST fix
+
+### Fixed
+- **POST /api/media** — when Supabase Storage rejects a file (bucket limits, config), the file is saved under local `/uploads` instead of failing the whole upload. Added validation, clearer errors, and schema alignment for older `media_items` tables.
+
+## [2026-09-27] — Media library API stability
+
+### Fixed
+- **GET /api/media** — safer file URL mapping (avoids crashes on bad `file_path` values), normalizes query params, and returns a clear error instead of an unhandled **500**.
+
+## [2026-09-27] — Reports analytics on Postgres
+
+### Fixed
+- **GET /api/reports/analytics** — translates SQLite `strftime()` to Postgres `TO_CHAR()` so member growth and related charts load on Supabase.
+
+## [2026-09-27] — Postgres fixes for discipleship & PWA manifest
+
+### Fixed
+- **GET /api/follow-ups** — replaced SQLite `rowid` sort with `id` so class notes load on Supabase Postgres.
+- **manifest.webmanifest** — returns a valid manifest with branding fallback instead of **500** when the DB read fails.
+- **SQL dialect** — maps `rowid` → `id` for any remaining legacy queries.
+
+## [2026-09-27] — API starts when database is misconfigured
+
+### Fixed
+- **Server startup** — Express listens even if Supabase Postgres fails to connect; `/api/public/config` and `/api/public/branding` still respond (branding uses `CHURCH_NAME` fallback). Other `/api/*` routes return **503** with a clear message instead of the Vite proxy showing **500** for every request.
+
+## [2026-09-27] — Department card opens modal
+
+### Fixed
+- **Ministry Departments** — clicking a department card opens the detail modal (`Card` now forwards `onClick` and other div props).
+
+## [2026-09-27] — Header menu icon
+
+### Changed
+- **App header** — menu control is hamburger-only (no “More” label); `aria-label` is “Open menu”.
+
+## [2026-09-27] — Ministry department detail modal
+
+### Added
+- **Ministry Departments** — horizontal department tabs and department cards open a modal with **Details** (head, members, permissions) and **Settings** (name, abilities, head, roster). Managers can save from the Settings tab; others see read-only settings.
+
+## [2026-09-27] — Session survives page reload
+
+### Fixed
+- **Auth** — refreshing `/app/...` no longer sends you to login while Supabase restores the session. The app now loads the persisted session before finishing the auth bootstrap, and no longer treats a brief “no session” event or a transient network error as a sign-out.
+
+## [2026-09-27] — Remove SQLite; Supabase Postgres only
+
+### Removed
+- **SQLite** — `better-sqlite3`, local `data/church.db`, and the SQLite schema/migrations in `server/db.js`. The API always connects to Supabase Postgres.
+
+### Changed
+- **`server/store.js`** — Postgres-only database layer; startup fails with a clear error if `DATABASE_URL` / Supabase DB env vars are missing.
+- **`npm run db:reset`** — still blocked for remote Supabase (use dashboard or a fresh project); no local SQLite reset path.
+- **`.env.example`**, **README** — document Supabase Postgres as the only database option.
+- **`/api/health`** — always reports `database: "supabase"`.
+
+## [2026-09-26] — Demo login session crash
+
+### Fixed
+- **Sign-in** — demo (and any Supabase) login no longer crashes with `Cannot read properties of undefined (reading 'user')`. Session setup was missing the department-abilities setter, so the profile response was never passed through.
+
+## [2026-09-27] — Vercel deployment
+
+### Added
+- **Vercel** — `vercel.json`, `api/index.js` (Express via `serverless-http`), and [docs/VERCEL.md](docs/VERCEL.md) for env vars and Supabase setup.
+- **`APP_URL`** — falls back to `VERCEL_URL` when unset.
+
+### Changed
+- **API server** — skips `listen()` and background jobs when `VERCEL` is set; uploads use `/tmp` on serverless.
+
+## [2026-09-27] — Stale Supabase session on load
+
+### Fixed
+- **Auth** — clears invalid refresh tokens on startup and when `/api/auth/me` fails (e.g. after `auth:sync` or API restart).
+
+## [2026-09-26] — Supabase connection fixes
+
+### Fixed
+- **Pooler host** — supports `aws-1-{region}` (`SUPABASE_POOLER_AWS_CLUSTER=1`) for CEYC CMS on `us-west-1`.
+- **Postgres SQL** — integer flags (`active`, `is_newcomer`, etc.) no longer rewritten to booleans.
+
+## [2026-09-26] — Supabase as primary church database
+
+### Changed
+- **Database** — API uses Supabase Postgres when `USE_SUPABASE_DB=true` (set `SUPABASE_DB_REGION`; use `SUPABASE_POOLER_AWS_CLUSTER=1` if your pooler host is `aws-1-{region}`).
+- **Connection** — pooler connection falls back to direct `db.<project>.supabase.co` if the pooler tenant lookup fails.
+- **Schema** — `server/schema.postgres.sql` applied automatically on first Postgres connect; Supabase migration resets legacy tables to the CEYC CMS schema.
+- **Seed** — `node server/seed.js` populates an empty Supabase database with demo church data (then run `npm run auth:sync`).
+
+## [2026-09-25] — More menu in header & event hosting
+
+### Changed
+- **More button** — moved from the mobile bottom nav into the app header (replacing the header logout icon), with a visible **More** label; opens the full sidebar menu.
+- **Bottom nav** — shows up to five primary destinations without a More slot.
+- **Log out** — moved into the sidebar under the user profile card.
+- **Create event** — **Hosted by** field: whole church, a fellowship, or a cell; host shown on event cards.
+
+### Added
+- **Events** — `fellowship_id` and `cell_id` on events (SQLite migration + Supabase migration).
+
 ## [2026-05-27] — Install app prompt after login
 
 ### Added

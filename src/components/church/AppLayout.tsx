@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, type ReactNode } from "react";
+import { useState, useEffect, useRef, createContext, useContext, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, LogOut, X } from "lucide-react";
+import { Bell, LogOut, Menu, X } from "lucide-react";
 import { memberProfilePath } from "@/lib/rbac";
 import { Badge, AvatarCircle, cn } from "@/components/church/ui";
 import { PAGE_META, type PageId, type Member } from "@/types/church";
@@ -11,6 +11,12 @@ import { useAuth } from "@/context/AuthContext";
 import { MobileBottomNav, MOBILE_NAV_PRIORITY } from "@/components/church/MobileBottomNav";
 import { ChurchBrand } from "@/components/church/ChurchBrand";
 import { PwaInstallPrompt } from "@/components/church/PwaInstallPrompt";
+
+const OpenMenuContext = createContext<(() => void) | null>(null);
+
+export function useOpenMenu() {
+  return useContext(OpenMenuContext);
+}
 
 interface Notification {
   id: string;
@@ -72,7 +78,7 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
   }, [notificationsOpen]);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
-  const mobileNavItems = MOBILE_NAV_PRIORITY.filter((p) => pages.includes(p)).slice(0, 4);
+  const mobileNavItems = MOBILE_NAV_PRIORITY.filter((p) => pages.includes(p)).slice(0, 5);
   const moreNavActive = sidebarOpen || !mobileNavItems.includes(activePage);
 
   const markAllRead = async () => {
@@ -123,6 +129,7 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
   };
 
   return (
+    <OpenMenuContext.Provider value={() => setSidebarOpen(true)}>
     <div className="app-viewport flex bg-background px-safe">
       {sidebarOpen && (
         <div className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm lg:hidden" onClick={() => setSidebarOpen(false)} aria-hidden />
@@ -164,7 +171,7 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
           ))}
         </nav>
 
-        <div className="shrink-0 border-t border-border p-4 pb-safe lg:pb-4">
+        <div className="shrink-0 space-y-2 border-t border-border p-4 pb-safe lg:pb-4">
           <button
             type="button"
             onClick={() => navigate(memberProfilePath(user.id))}
@@ -175,6 +182,14 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
               <p className="truncate text-sm font-semibold text-foreground">{user.name}</p>
               <p className="truncate text-xs text-muted-foreground">{user.role}</p>
             </div>
+          </button>
+          <button
+            type="button"
+            onClick={logout}
+            className="flex w-full min-h-[40px] items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-destructive"
+          >
+            <LogOut className="h-[18px] w-[18px] shrink-0" strokeWidth={2} />
+            <span>Log out</span>
           </button>
         </div>
       </aside>
@@ -251,11 +266,17 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
 
               <button
                 type="button"
-                className="touch-target flex h-10 w-10 items-center justify-center rounded-xl text-muted-foreground transition hover:bg-muted hover:text-destructive"
-                onClick={logout}
-                aria-label="Log out"
+                className={cn(
+                  "touch-target flex h-10 w-10 items-center justify-center rounded-xl transition",
+                  moreNavActive
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                )}
+                onClick={() => setSidebarOpen((open) => !open)}
+                aria-label="Open menu"
+                aria-expanded={sidebarOpen}
               >
-                <LogOut className="h-5 w-5" />
+                <Menu className="h-5 w-5 shrink-0" strokeWidth={moreNavActive ? 2.25 : 2} />
               </button>
             </div>
           </div>
@@ -274,8 +295,6 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
           items={mobileNavItems}
           activePage={activePage}
           onNavigate={handleNavigate}
-          onOpenMenu={() => setSidebarOpen(true)}
-          menuActive={moreNavActive}
         />
       </div>
 
@@ -285,5 +304,6 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
         tagline={settings.tagline}
       />
     </div>
+    </OpenMenuContext.Provider>
   );
 }

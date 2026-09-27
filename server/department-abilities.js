@@ -71,6 +71,7 @@ export function getPresetAbilitiesForName(name) {
 export function parseDepartmentAbilities(raw) {
   if (!raw) return [];
   if (Array.isArray(raw)) return raw.filter((a) => DEPARTMENT_ABILITIES.includes(a));
+  if (typeof raw === "object") return [];
   if (typeof raw !== "string") return [];
   try {
     const parsed = JSON.parse(raw);

@@ -1,4 +1,3 @@
-import { LayoutGrid } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PAGE_META, type PageId } from "@/types/church";
 import { PAGE_ICONS } from "@/lib/page-icons";
@@ -34,14 +33,10 @@ export function MobileBottomNav({
   items,
   activePage,
   onNavigate,
-  onOpenMenu,
-  menuActive,
 }: {
   items: PageId[];
   activePage: PageId;
   onNavigate: (page: PageId) => void;
-  onOpenMenu: () => void;
-  menuActive: boolean;
 }) {
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 lg:hidden" aria-label="Main navigation">
@@ -68,20 +63,6 @@ export function MobileBottomNav({
               </button>
             );
           })}
-
-          <button
-            type="button"
-            onClick={onOpenMenu}
-            aria-label="Open full menu"
-            aria-expanded={menuActive}
-            className={cn(
-              "relative flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl px-1 py-1 text-[10px] font-semibold transition-all duration-150",
-              menuActive ? "bg-primary text-primary-foreground" : "text-muted-foreground active:scale-95"
-            )}
-          >
-            <LayoutGrid className="h-5 w-5 shrink-0" strokeWidth={menuActive ? 2.25 : 2} aria-hidden />
-            <span className="leading-tight">More</span>
-          </button>
         </div>
       </div>
     </nav>

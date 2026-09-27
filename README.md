@@ -1,23 +1,29 @@
 # Christ Embassy — Local Church Management System
 
-Production-ready church management platform with a **React frontend**, **Express API**, and **SQLite** database. Data persists across restarts; each user signs in with email and password. Optional **SMTP** sends password-reset emails in production.
+Production-ready church management platform with a **React frontend**, **Express API**, and **Supabase Postgres** database. Data persists in your Supabase project; each user signs in with email and password. Optional **SMTP** sends password-reset emails in production.
 
 ## Features
 
 - **16 modules** with full CRUD where applicable
 - **JWT auth** (default) or optional **Supabase Auth** when `USE_SUPABASE_AUTH=true`
 - **Role-based access control** on API and UI
-- **SQLite** — all church data stored locally in `data/church.db`
+- **Supabase Postgres** — all church data in your Supabase database
 - **SMTP email** for password reset (falls back to dev token in API when unset)
 - **File uploads** for media library (`uploads/`)
 - **Notifications** for tasks, messages, and assignments
 
 ## Quick start
 
+1. Copy `.env.example` to `.env` and configure Supabase Postgres:
+   - Set `USE_SUPABASE_DB=true`, `SUPABASE_DB_PASSWORD`, `SUPABASE_PROJECT_REF`, and `SUPABASE_DB_REGION` (or paste `DATABASE_URL` from the Supabase dashboard).
+2. Verify connection: `npm run db:test:pg`
+3. Install and run:
+
 ```bash
 npm install
-npm run db:reset    # create / reset database with seed data
-npm run dev         # API on :3001 + Vite on :8080
+npm run db:seed      # seed empty database (skipped if members already exist)
+npm run auth:sync    # link seeded users to Supabase Auth (when USE_SUPABASE_AUTH=true)
+npm run dev          # API on :3001 + Vite on :8080
 ```
 
 Open **http://localhost:8080** and sign in.
@@ -33,13 +39,13 @@ Open **http://localhost:8080** and sign in.
 | chioma@celcm.org | Cell Leader |
 | member1@celcm.org | Church Member |
 
-Change `SEED_PASSWORD` in `.env` before running `npm run db:reset` in production.
+Change `SEED_PASSWORD` in `.env` before seeding production data.
 
 ## Optional Supabase Auth
 
 To use Supabase for sign-in instead of local JWT:
 
-1. Copy `.env.example` to `.env` and set:
+1. In `.env`, set:
    - `USE_SUPABASE_AUTH=true`
    - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
    - `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` (required before build)
@@ -48,24 +54,31 @@ To use Supabase for sign-in instead of local JWT:
    - `http://localhost:8080/reset-password` (dev)
    - Your production URL + `/reset-password`
 
-Church data remains in SQLite; Supabase is used only for authentication (and optionally file storage with `USE_SUPABASE_STORAGE=true`).
+Church data lives in Supabase Postgres; Supabase Auth handles sign-in (and optionally file storage with `USE_SUPABASE_STORAGE=true`).
 
 ## Production deployment
 
 ```bash
 cp .env.example .env
-# Edit JWT_SECRET, SEED_PASSWORD, and optionally SMTP_*, APP_URL
+# Edit JWT_SECRET, SEED_PASSWORD, Supabase DB + auth vars, and optionally SMTP_*, APP_URL
 npm install
-npm run db:reset
+npm run db:seed
+npm run auth:sync
 npm run build
 npm start
 ```
 
 `npm start` serves the API and the built React app from `dist/` on port **3001** (or `PORT` from `.env`).
 
+## Deploy on Vercel
+
+Frontend + API as a **serverless** deployment. Requires **Supabase Postgres** (and recommended: Supabase Auth + Storage).
+
+See **[docs/VERCEL.md](docs/VERCEL.md)** for environment variables, Supabase redirect URLs, and seeding.
+
 ## Deploy on Render (Web Service)
 
-One **Web Service** runs the Express API and serves the built React app from `dist/`. SQLite data lives on the service disk (use a persistent disk on Render for production).
+One **Web Service** runs the Express API and serves the built React app from `dist/`. Church data is stored in **Supabase Postgres** (not on the Render disk).
 
 ### Step-by-step — New Web Service
 
@@ -80,7 +93,7 @@ One **Web Service** runs the Express API and serves the built React app from `di
 | **Start Command** | `npm start` |
 | **Health Check Path** | `/api/health` |
 
-4. **Environment** — add `JWT_SECRET`, `SEED_PASSWORD`, and optionally Supabase Auth vars (`USE_SUPABASE_AUTH`, `SUPABASE_*`, `VITE_SUPABASE_*`).
+4. **Environment** — add `JWT_SECRET`, `SEED_PASSWORD`, Supabase database vars (`USE_SUPABASE_DB`, `SUPABASE_DB_*` or `DATABASE_URL`), and optionally Supabase Auth (`USE_SUPABASE_AUTH`, `SUPABASE_*`, `VITE_SUPABASE_*`).
 
 5. Click **Create Web Service** and wait for the build (~2–5 min).
 
@@ -92,17 +105,18 @@ Render sets `RENDER_EXTERNAL_URL` automatically — password-reset links use tha
 
 ### After deploy
 
-- Health check: `GET https://your-app.onrender.com/api/health` → `{ "ok": true, "database": "sqlite" }`
+- Health check: `GET https://your-app.onrender.com/api/health` → `{ "ok": true, "database": "supabase" }`
 - Login: `pastor@celcm.org` / your `SEED_PASSWORD` (default `ChangeMe123!`)
 - Free tier sleeps when idle; first load may take ~30s.
 
 ## Project structure
 
 ```
-server/           Express API + SQLite
-  db.js           Schema
+server/           Express API + Supabase Postgres
+  store.js        Database access (pg)
+  pg-store.js     Connection pool + schema bootstrap
   seed.js         Seed data
-  auth.js         JWT middleware
+  auth.js         JWT / Supabase auth middleware
   rbac.js         Permissions
   index.js        Routes
 src/
@@ -110,7 +124,6 @@ src/
   components/     Layout + UI
   context/        Auth state
   lib/api.ts      API client
-data/             SQLite database (gitignored)
 uploads/          Media files (gitignored)
 ```
 
@@ -121,5 +134,6 @@ uploads/          Media files (gitignored)
 | `npm run dev` | Dev: frontend + API with hot reload |
 | `npm run build` | Build React for production |
 | `npm start` | Run production server |
-| `npm run db:reset` | Reset and re-seed SQLite database |
+| `npm run db:seed` | Seed empty Supabase database |
+| `npm run db:test:pg` | Test Postgres connection |
 | `npm run auth:sync` | Link church users to Supabase Auth (`auth.users`) |

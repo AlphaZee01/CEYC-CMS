@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { ArrowLeft, Check, CheckCheck, Clock, Megaphone, Search, Send } from "lucide-react";
+import { ArrowLeft, Check, CheckCheck, Clock, LayoutGrid, Megaphone, Search, Send } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { supabase, supabaseConfigured, memberChatChannel } from "@/lib/supabase";
@@ -13,6 +13,7 @@ import type { ChatMessage, Conversation } from "@/lib/chat-types";
 import { cn, AvatarCircle } from "@/components/church/ui";
 import { ChatListSkeleton, ChatThreadSkeleton } from "@/components/church/skeletons";
 import { ICON_TONES, toneFromString } from "@/lib/icon-colors";
+import { useOpenMenu } from "@/components/church/AppLayout";
 import type { Member } from "@/types/church";
 
 interface ChatAppProps {
@@ -71,6 +72,7 @@ function MessageStatusIndicator({ message, isMine }: { message: ChatMessage; isM
 }
 
 export function ChatApp({ members, currentUser }: ChatAppProps) {
+  const openMenu = useOpenMenu();
   const [conversations, setConversations] = useState<Conversation[]>(() =>
     loadConversationCache(currentUser.id)
   );
@@ -286,7 +288,19 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
               <h2 className="text-xl font-semibold tracking-tight">Messages</h2>
               <p className="text-xs text-white/70">Chat with your church family</p>
             </div>
+            <div className="flex items-center gap-1.5">
+              {openMenu && (
+                <button
+                  type="button"
+                  className="touch-target flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 transition hover:bg-white/20 lg:hidden"
+                  onClick={openMenu}
+                  aria-label="Open full menu"
+                >
+                  <LayoutGrid className="h-5 w-5" />
+                </button>
+              )}
               <AvatarCircle name={currentUser.name} size="sm" variant="solid" />
+            </div>
           </div>
           <div className="relative mt-4">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -418,6 +432,16 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
                   <p className="truncate text-xs text-white/70">Direct message</p>
                 )}
               </div>
+              {openMenu && (
+                <button
+                  type="button"
+                  className="touch-target flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 transition hover:bg-white/20 lg:hidden"
+                  onClick={openMenu}
+                  aria-label="Open full menu"
+                >
+                  <LayoutGrid className="h-5 w-5" />
+                </button>
+              )}
             </header>
 
             <div ref={messagesRef} className="flex-1 space-y-2 overflow-y-auto px-3 py-4">

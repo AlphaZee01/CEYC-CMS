@@ -1,4 +1,5 @@
 import { publicApi } from "@/lib/api";
+import { supabaseAuthEnabled } from "@/lib/supabase";
 
 export type AuthMode = "jwt" | "supabase";
 
@@ -25,8 +26,12 @@ export async function loadAuthMode(): Promise<AuthMode> {
         lastError = err;
       }
     }
-    console.warn("[auth] Could not load /api/public/config; using JWT login.", lastError);
-    authMode = "jwt";
+    const fallback = supabaseAuthEnabled ? "supabase" : "jwt";
+    console.warn(
+      `[auth] Could not load /api/public/config; using ${fallback} login from client env.`,
+      lastError
+    );
+    authMode = fallback;
     loaded = true;
     return authMode;
   })();
