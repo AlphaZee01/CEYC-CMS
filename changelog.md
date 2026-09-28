@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-09-28] — Dedicated GitHub repo setup
+
+### Added
+- **`npm run repo:github`** — creates `CEYC-CMS` on GitHub (classic PAT with **repo** scope) and pushes `main`; fine-grained PATs get instructions to create the empty repo first, then re-run.
+
 ## [2026-09-27] — Vercel deploy helpers
 
 ### Added

@@ -20,6 +20,7 @@
     "auth:sync": "node scripts/sync-supabase-auth.mjs",
     "vercel:env": "node scripts/sync-vercel-env.mjs",
     "vercel:deploy": "npx vercel --prod",
+    "repo:github": "node scripts/create-github-repo.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",

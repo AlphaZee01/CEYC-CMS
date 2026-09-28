@@ -12,6 +12,30 @@ Production-ready church management platform with a **React frontend**, **Express
 - **File uploads** for media library (`uploads/`)
 - **Notifications** for tasks, messages, and assignments
 
+## GitHub repository
+
+This project is intended to live in **`AlphaZee01/CEYC-CMS`**. Older pushes may still be on `the-style-edit` branch `cursor/church-production-system-90cb`.
+
+**Create the new repo and push (one time):**
+
+1. Create a **classic** [personal access token](https://github.com/settings/tokens?type=beta) with **repo** scope (fine-grained tokens often cannot *create* new repos).
+2. In PowerShell, from this folder:
+
+```powershell
+$env:GITHUB_TOKEN="ghp_your_token_here"
+npm run repo:github
+```
+
+That creates **CEYC-CMS**, keeps the old remote as `the-style-edit`, sets `origin` to the new repo, and pushes **`main`**.
+
+**Manual alternative:** [Create an empty repo named CEYC-CMS](https://github.com/new?name=CEYC-CMS&description=Christ+Embassy+Church+CMS), then:
+
+```bash
+git remote rename origin the-style-edit
+git remote add origin https://github.com/AlphaZee01/CEYC-CMS.git
+git push -u origin HEAD:main
+```
+
 ## Quick start
 
 1. Copy `.env.example` to `.env` and configure Supabase Postgres:
