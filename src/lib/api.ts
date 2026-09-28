@@ -31,6 +31,32 @@ export async function publicApi<T>(path: string, options: RequestInit = {}): Pro
   return data as T;
 }
 
+/** Authenticated fetch using an explicit bearer token (avoids Supabase getSession during sign-in). */
+export async function apiWithBearer<T>(
+  path: string,
+  bearerToken: string,
+  options: RequestInit = {}
+): Promise<T> {
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string>),
+  };
+  if (!(options.body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+  }
+  headers.Authorization = `Bearer ${bearerToken}`;
+
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const data = await res.json().catch(() => ({}));
+
+  if (res.status === 401) {
+    const message = (data.error as string) || "Session expired";
+    throw new Error(message);
+  }
+
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data as T;
+}
+
 export async function api<T>(
   path: string,
   options: RequestInit = {}
@@ -87,6 +113,13 @@ export const authApi = {
       departmentAbilities?: string[];
       branding?: { name: string; tagline?: string; logoUrl?: string | null };
     }>("/auth/me"),
+  meWithBearer: (bearerToken: string) =>
+    apiWithBearer<{
+      user: unknown;
+      pages: string[];
+      departmentAbilities?: string[];
+      branding?: { name: string; tagline?: string; logoUrl?: string | null };
+    }>("/auth/me", bearerToken),
 };
 
 export function exportCSV(filename: string, headers: string[], rows: string[][]) {

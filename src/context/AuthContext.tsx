@@ -73,6 +73,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [branding, setBranding] = useState<ChurchBranding>(getCachedBranding);
   const [loading, setLoading] = useState(true);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  /** True while login() is loading the session — skip SIGNED_IN listener refresh (avoids auth lock deadlock). */
+  const signInFlowRef = useRef(false);
+
+  const scheduleSessionRefresh = useCallback(() => {
+    queueMicrotask(() => {
+      void refresh();
+    });
+  }, [refresh]);
 
   const clearSession = useCallback(async () => {
     setUser(null);
@@ -134,7 +142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           }
 
-          const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+          const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
             if (!mounted) return;
             authLog(`Supabase auth: ${event}`, session ? "has session" : "no session");
 
@@ -147,8 +155,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               return;
             }
 
-            if (session && (event === "TOKEN_REFRESHED" || event === "SIGNED_IN")) {
-              await refresh();
+            if (!session) return;
+
+            if (event === "SIGNED_IN" && signInFlowRef.current) return;
+
+            if (event === "TOKEN_REFRESHED" || event === "SIGNED_IN") {
+              scheduleSessionRefresh();
             }
           });
 
@@ -168,16 +180,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       mounted = false;
       unsubPromise.then((unsub) => unsub?.());
     };
-  }, [refresh]);
+  }, [refresh, scheduleSessionRefresh]);
 
   const login = async (email: string, password: string) => {
     authLogStart(`Sign-in: ${email}`);
+    await loadAuthMode();
 
     if (useSupabaseForAuth()) {
-      await authLogTimed("Supabase signInWithPassword", () => signInWithEmail(email, password));
-      const data = await authLogTimed("GET /api/auth/me", () => authApi.me());
-      applySession(setUser, setPages, setDepartmentAbilities, setBranding, data);
-      authLog("Sign-in complete");
+      signInFlowRef.current = true;
+      try {
+        const session = await authLogTimed("Supabase signInWithPassword", () =>
+          signInWithEmail(email, password)
+        );
+        const data = await authLogTimed("GET /api/auth/me", () =>
+          authApi.meWithBearer(session.access_token)
+        );
+        applySession(setUser, setPages, setDepartmentAbilities, setBranding, data);
+        authLog("Sign-in complete");
+      } finally {
+        signInFlowRef.current = false;
+      }
       return;
     }
 

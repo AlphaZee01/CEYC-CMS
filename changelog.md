@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-09-28] — Sign-in spinner stuck on Continue
+
+### Fixed
+- **Supabase login hang** — `onAuthStateChange` no longer awaits `/api/auth/me` inside the auth callback (avoids a Supabase client lock deadlock with `signInWithPassword`). Manual sign-in loads the profile with the token returned from sign-in instead of calling `getSession()` mid-flow.
+- **Login page** — Continue stays disabled until auth mode is loaded from `/api/public/config`; the button spinner always clears in `finally` if sign-in fails.
+
 ## [2026-09-28] — Dedicated GitHub repo setup
 
 ### Added

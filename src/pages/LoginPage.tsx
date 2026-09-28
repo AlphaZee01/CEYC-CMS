@@ -10,7 +10,7 @@ import { Btn, Input } from "@/components/church/ui";
 import { ChurchBrand } from "@/components/church/ChurchBrand";
 
 export default function LoginPage() {
-  const { login, user } = useAuth();
+  const { login, user, loading: authBootstrapping } = useAuth();
   const [branding, setBranding] = useState(getCachedBranding);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -33,6 +33,7 @@ export default function LoginPage() {
       await login(email, password);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
+    } finally {
       setLoading(false);
     }
   };
@@ -137,9 +138,9 @@ export default function LoginPage() {
               <Input label="Email address" value={email} onChange={setEmail} type="email" placeholder="pastor@celcm.org" />
               <Input label="Password" value={password} onChange={setPassword} type="password" placeholder="••••••••" />
               {error && <p className="rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
-              <Btn type="submit" className="w-full gap-2" disabled={loading}>
+              <Btn type="submit" className="w-full gap-2" disabled={loading || authBootstrapping}>
                 {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-                {loading ? "Signing in..." : "Continue"}
+                {authBootstrapping ? "Loading..." : loading ? "Signing in..." : "Continue"}
               </Btn>
               <div className="flex items-center justify-between text-sm">
                 <button

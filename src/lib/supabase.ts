@@ -67,8 +67,10 @@ export async function getSupabaseAccessToken(): Promise<string | null> {
 
 export async function signInWithEmail(email: string, password: string) {
   if (!supabase) throw new Error("Supabase is not configured");
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) throw new Error(error.message);
+  if (!data.session?.access_token) throw new Error("Sign-in succeeded but no session was returned");
+  return data.session;
 }
 
 export async function resetPasswordForEmail(email: string) {
