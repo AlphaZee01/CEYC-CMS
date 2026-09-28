@@ -133,13 +133,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (mode === "supabase" && supabase) {
           await ensureValidSupabaseSession();
           const { data: { session: initialSession } } = await supabase.auth.getSession();
-          if (mounted) {
-            if (initialSession) await refresh();
-            else {
-              setUser(null);
-              setPages([]);
-              setDepartmentAbilities([]);
-            }
+          if (mounted && !initialSession) {
+            setUser(null);
+            setPages([]);
+            setDepartmentAbilities([]);
           }
 
           const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
@@ -164,13 +161,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           });
 
+          if (mounted && initialSession) void refresh();
           return () => subscription.unsubscribe();
         }
 
         const token = localStorage.getItem("celcm_token");
-        if (token && mounted) await refresh();
+        if (token && mounted) void refresh();
       } finally {
-        if (mounted) setLoading(false);
+        setLoading(false);
       }
       return undefined;
     };
