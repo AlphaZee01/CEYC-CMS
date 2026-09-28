@@ -76,12 +76,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   /** True while login() is loading the session — skip SIGNED_IN listener refresh (avoids auth lock deadlock). */
   const signInFlowRef = useRef(false);
 
-  const scheduleSessionRefresh = useCallback(() => {
-    queueMicrotask(() => {
-      void refresh();
-    });
-  }, [refresh]);
-
   const clearSession = useCallback(async () => {
     setUser(null);
     setPages([]);
@@ -121,6 +115,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refreshPromiseRef.current = null;
     }
   }, [clearSession]);
+
+  const scheduleSessionRefresh = useCallback(() => {
+    queueMicrotask(() => {
+      void refresh();
+    });
+  }, [refresh]);
 
   useEffect(() => {
     let mounted = true;
