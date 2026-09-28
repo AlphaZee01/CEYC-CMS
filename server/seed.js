@@ -58,7 +58,7 @@ async function populateSeedData(db) {
 
   await db.prepare(settingsSql).run(
 
-    "Christ Embassy Lagos Zone",
+    "Christ Embassy Airport City Jesus Brand",
 
     "Raising a people of excellence",
 

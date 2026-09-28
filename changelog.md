@@ -1,5 +1,26 @@
 # Changelog
 
+## [2026-09-27] — Vercel deploy helpers
+
+### Added
+- **`npm run vercel:env`** — syncs `.env` to the linked Vercel project (production + preview).
+- **`npm run vercel:deploy`** — production deploy via Vercel CLI.
+
+### Changed
+- **`vercel.json`** — SPA fallback rewrite for `/app/*` client routes.
+
+## [2026-09-27] — Church display name
+
+### Changed
+- **Branding** — church name set to **Christ Embassy Airport City Jesus Brand** (`.env`, seed defaults, `church_settings` in Supabase, login/PWA fallbacks).
+
+## [2026-09-27] — Edit media after upload
+
+### Added
+- **Media library** — **Edit** on each item (uploader, Admin, or pastoral roles) to change title, speaker, series, topic, date, sharing, Google Drive link, or replace the file after upload.
+- **PATCH /api/media/:id** — metadata updates alongside existing pastor approve/reject.
+- **Upload form** — **Topic** field on new uploads.
+
 ## [2026-09-27] — Vite outdated optimize deps
 
 ### Fixed

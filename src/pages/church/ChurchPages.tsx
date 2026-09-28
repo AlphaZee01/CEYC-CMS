@@ -5201,6 +5201,9 @@ interface MediaItem {
   date: string;
   fileUrl: string | null;
   status?: "pending" | "approved" | "rejected";
+  uploadedBy?: string;
+  shareTarget?: string;
+  shareTargetId?: string;
 }
 
 type MediaUploadSource = "file" | "driveLink";
@@ -5216,6 +5219,11 @@ export function MediaPage({ currentUser }: PageProps) {
   const [file, setFile] = useState<File | null>(null);
   const [playing, setPlaying] = useState<MediaItem | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [editing, setEditing] = useState<MediaItem | null>(null);
+  const [editForm, setEditForm] = useState({ title: "", type: "video", speaker: "", series: "", topic: "", date: "", shareTarget: "all", shareTargetId: "" });
+  const [editVideoLink, setEditVideoLink] = useState("");
+  const [editFile, setEditFile] = useState<File | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const resetUploadForm = () => {
     setForm({ title: "", type: "video", speaker: "", series: "", topic: "", date: "", shareTarget: "all", shareTargetId: "" });
@@ -5315,6 +5323,98 @@ export function MediaPage({ currentUser }: PageProps) {
 
   const isPastoral = canApproveMedia(currentUser.role);
 
+  const canEditMediaItem = (m: MediaItem) =>
+    isPastoral ||
+    currentUser.role === "Admin" ||
+    (capabilities.canUpload && m.uploadedBy === currentUser.id);
+
+  const openEdit = (m: MediaItem) => {
+    setEditing(m);
+    setEditForm({
+      title: m.title,
+      type: m.type,
+      speaker: m.speaker || "",
+      series: m.series || "",
+      topic: m.topic || "",
+      date: m.date || "",
+      shareTarget: m.shareTarget || "all",
+      shareTargetId: m.shareTargetId || "",
+    });
+    setEditVideoLink(m.fileUrl && isGoogleDriveUrl(m.fileUrl) ? m.fileUrl : "");
+    setEditFile(null);
+  };
+
+  const closeEditModal = () => {
+    setEditing(null);
+    setEditFile(null);
+    setEditVideoLink("");
+  };
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    if (!editForm.title.trim()) {
+      toast.error("Title is required");
+      return;
+    }
+    if (editForm.type === "video" && editVideoLink.trim() && !isGoogleDriveUrl(editVideoLink.trim())) {
+      toast.error("Use a valid Google Drive share link for video");
+      return;
+    }
+
+    setSavingEdit(true);
+    try {
+      if (editFile) {
+        const fd = new FormData();
+        fd.append("title", editForm.title.trim());
+        fd.append("type", editForm.type);
+        fd.append("speaker", editForm.speaker);
+        fd.append("series", editForm.series);
+        fd.append("topic", editForm.topic);
+        fd.append("date", editForm.date || editing.date);
+        fd.append("shareTarget", editForm.shareTarget);
+        if (editForm.shareTargetId) fd.append("shareTargetId", editForm.shareTargetId);
+        fd.append("file", editFile);
+        await api(`/media/${editing.id}`, { method: "PATCH", body: fd });
+      } else if (editForm.type === "video" && editVideoLink.trim()) {
+        await api(`/media/${editing.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            title: editForm.title.trim(),
+            type: editForm.type,
+            speaker: editForm.speaker,
+            series: editForm.series,
+            topic: editForm.topic,
+            date: editForm.date || editing.date,
+            shareTarget: editForm.shareTarget,
+            shareTargetId: editForm.shareTargetId || undefined,
+            fileUrl: editVideoLink.trim(),
+          }),
+        });
+      } else {
+        await api(`/media/${editing.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            title: editForm.title.trim(),
+            type: editForm.type,
+            speaker: editForm.speaker,
+            series: editForm.series,
+            topic: editForm.topic,
+            date: editForm.date || editing.date,
+            shareTarget: editForm.shareTarget,
+            shareTargetId: editForm.shareTargetId || undefined,
+          }),
+        });
+      }
+      toast.success("Media updated");
+      closeEditModal();
+      load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Update failed");
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -5352,8 +5452,14 @@ export function MediaPage({ currentUser }: PageProps) {
                 </div>
                 <p className="text-sm text-muted-foreground">{m.speaker} · {m.series}</p>
                 <p className="text-xs text-muted-foreground">{m.date} · {m.topic}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {canEditMediaItem(m) && (
+                    <Btn variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => openEdit(m)}>
+                      <Edit className="h-3 w-3" /> Edit
+                    </Btn>
+                  )}
                 {m.fileUrl && m.status !== "rejected" && (
-                  <div className="mt-2 flex flex-wrap gap-2">
+                  <>
                     {(m.type === "video" || m.type === "audio") && (
                       <Btn variant="accent" className="!px-2 !py-1 text-xs" onClick={() => setPlaying(m)}>
                         <Play className="h-3 w-3" /> Play
@@ -5375,8 +5481,9 @@ export function MediaPage({ currentUser }: PageProps) {
                         </>
                       )}
                     </a>
-                  </div>
+                  </>
                 )}
+                </div>
                 {capabilities.canApprove && m.status === "pending" && (
                   <div className="mt-2 flex gap-2">
                     <Btn variant="accent" className="!px-2 !py-1 text-xs" onClick={() => setMediaStatus(m.id, "approved")}>Approve</Btn>
@@ -5403,6 +5510,7 @@ export function MediaPage({ currentUser }: PageProps) {
           />
           <Input label="Speaker" value={form.speaker} onChange={(v) => setForm((f) => ({ ...f, speaker: v }))} />
           <Input label="Series" value={form.series} onChange={(v) => setForm((f) => ({ ...f, series: v }))} />
+          <Input label="Topic" value={form.topic} onChange={(v) => setForm((f) => ({ ...f, topic: v }))} />
           <Input label="Date" type="date" value={form.date} onChange={(v) => setForm((f) => ({ ...f, date: v }))} />
           <Select label="Share with" value={form.shareTarget} onChange={(v) => setForm((f) => ({ ...f, shareTarget: v }))} options={[{ value: "all", label: "All members" }, { value: "cell", label: "Cell" }, { value: "fellowship", label: "Fellowship" }, { value: "department", label: "Department" }]} />
           {form.type === "video" && (
@@ -5444,6 +5552,57 @@ export function MediaPage({ currentUser }: PageProps) {
             </Btn>
             <Btn className="!flex-1" onClick={upload} disabled={uploading}>
               {uploading ? "Saving…" : uploadSource === "driveLink" ? "Add link" : "Upload"}
+            </Btn>
+          </ModalFooter>
+        </div>
+      </Modal>
+      <Modal open={!!editing} onClose={closeEditModal} title="Edit Media" size="md">
+        <div className="space-y-3">
+          <Input label="Title" value={editForm.title} onChange={(v) => setEditForm((f) => ({ ...f, title: v }))} />
+          <Select
+            label="Type"
+            value={editForm.type}
+            onChange={(v) => setEditForm((f) => ({ ...f, type: v }))}
+            options={["video", "audio", "notes", "slides"].map((t) => ({ value: t, label: t }))}
+          />
+          <Input label="Speaker" value={editForm.speaker} onChange={(v) => setEditForm((f) => ({ ...f, speaker: v }))} />
+          <Input label="Series" value={editForm.series} onChange={(v) => setEditForm((f) => ({ ...f, series: v }))} />
+          <Input label="Topic" value={editForm.topic} onChange={(v) => setEditForm((f) => ({ ...f, topic: v }))} />
+          <Input label="Date" type="date" value={editForm.date} onChange={(v) => setEditForm((f) => ({ ...f, date: v }))} />
+          <Select
+            label="Share with"
+            value={editForm.shareTarget}
+            onChange={(v) => setEditForm((f) => ({ ...f, shareTarget: v }))}
+            options={[
+              { value: "all", label: "All members" },
+              { value: "cell", label: "Cell" },
+              { value: "fellowship", label: "Fellowship" },
+              { value: "department", label: "Department" },
+            ]}
+          />
+          {editForm.type === "video" && (
+            <Input
+              label="Google Drive video link (optional)"
+              value={editVideoLink}
+              onChange={setEditVideoLink}
+              placeholder="Leave blank to keep current file"
+            />
+          )}
+          <label className="block">
+            <span className="mb-2 block text-sm font-medium text-foreground">Replace file (optional)</span>
+            <input
+              type="file"
+              accept={editForm.type === "video" ? "video/*" : editForm.type === "audio" ? "audio/*" : undefined}
+              onChange={(e) => setEditFile(e.target.files?.[0] || null)}
+              className="w-full text-sm"
+            />
+          </label>
+          <ModalFooter>
+            <Btn variant="ghost" className="!flex-1" onClick={closeEditModal} disabled={savingEdit}>
+              Cancel
+            </Btn>
+            <Btn className="!flex-1" onClick={saveEdit} disabled={savingEdit}>
+              {savingEdit ? "Saving…" : "Save changes"}
             </Btn>
           </ModalFooter>
         </div>

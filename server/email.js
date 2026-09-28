@@ -49,7 +49,7 @@ export async function sendEmail({ to, subject, html, text }) {
 
 export async function sendPasswordResetEmail(to, token) {
   const resetUrl = `${APP_URL}/reset-password?token=${encodeURIComponent(token)}`;
-  const churchName = process.env.CHURCH_NAME || "Christ Embassy LCM";
+  const churchName = process.env.CHURCH_NAME || "Christ Embassy Airport City Jesus Brand";
   return sendEmail({
     to,
     subject: `${churchName} — Password reset`,

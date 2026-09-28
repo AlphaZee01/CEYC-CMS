@@ -10,7 +10,7 @@ export interface ChurchBranding {
 const CACHE_KEY = "celcm_branding";
 
 export const DEFAULT_BRANDING: ChurchBranding = {
-  name: "Christ Embassy",
+  name: "Christ Embassy Airport City Jesus Brand",
   tagline: "Local Church Management System",
 };
 

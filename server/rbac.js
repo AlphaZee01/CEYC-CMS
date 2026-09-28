@@ -77,6 +77,12 @@ export function canViewAllMedia(role) {
   return ["Senior Pastor", "Associate Pastor", "Admin"].includes(role) || canApproveMedia(role);
 }
 
+/** Edit metadata (title, speaker, link, etc.) — uploader or pastoral/admin staff. */
+export function canEditMediaItem(member, item) {
+  if (["Senior Pastor", "Associate Pastor", "Admin"].includes(member.role)) return true;
+  return item?.uploaded_by === member.id;
+}
+
 export function canManageEvents(role) {
   return ["Senior Pastor", "Associate Pastor", "Admin", "Fellowship Leader"].includes(role);
 }

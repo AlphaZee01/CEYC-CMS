@@ -18,6 +18,8 @@
     "db:seed": "node server/seed.js",
     "db:test:pg": "node scripts/test-supabase-connection.mjs",
     "auth:sync": "node scripts/sync-supabase-auth.mjs",
+    "vercel:env": "node scripts/sync-vercel-env.mjs",
+    "vercel:deploy": "npx vercel --prod",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",

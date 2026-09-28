@@ -485,7 +485,7 @@ export function brandingFromSettings(settings, req) {
 
   return {
 
-    name: settings?.name || "Christ Embassy",
+    name: settings?.name || "Christ Embassy Airport City Jesus Brand",
 
     tagline: settings?.tagline || "Local Church Management System",
 

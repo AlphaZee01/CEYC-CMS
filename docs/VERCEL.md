@@ -8,11 +8,34 @@ This app deploys as a **Vite static frontend** plus a **single serverless API** 
 - **Supabase Auth** — recommended (`USE_SUPABASE_AUTH=true`).
 - **Supabase Storage** — recommended for uploads (`USE_SUPABASE_STORAGE=true`). Local `uploads/` is ephemeral on serverless.
 
-## Setup
+## Option A — GitHub (recommended)
 
-1. Push the repo to GitHub and import the project in [Vercel](https://vercel.com/new).
-2. Framework preset: **Vite** (from `vercel.json`).
-3. Add **Environment variables** (Production + Preview):
+1. **Commit and push** your branch to GitHub (this repo: `AlphaZee01/the-style-edit`).
+2. Open [vercel.com/new](https://vercel.com/new) → **Import** the repository.
+3. **Root directory**: project root (where `vercel.json` lives).
+4. Framework: **Vite** (auto-detected from `vercel.json`).
+5. Add **Environment variables** (Production **and** Preview) — see table below.
+6. **Deploy**. Copy the production URL (e.g. `https://ceyc-cms.vercel.app`).
+7. In Vercel → **Settings → Environment variables**, set **`APP_URL`** to that URL (no trailing slash), then **Redeploy**.
+8. In **Supabase → Authentication → URL Configuration**:
+   - **Site URL**: your `APP_URL`
+   - **Redirect URLs**: `https://your-app.vercel.app/reset-password`
+9. Log in on production with a user from `npm run auth:sync` (run locally against the same Supabase project).
+
+## Option B — Vercel CLI (from this machine)
+
+```bash
+npx vercel login
+npx vercel link
+npm run vercel:env
+npx vercel --prod
+```
+
+Then set **`APP_URL`** on Vercel to the production URL and redeploy (step 7–8 above).
+
+## Environment variables
+
+Add these in the Vercel dashboard (Production + Preview):
 
 | Variable | Notes |
 |----------|--------|

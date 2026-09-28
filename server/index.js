@@ -26,6 +26,7 @@ import {
   canUploadMedia,
   canApproveMedia,
   canViewAllMedia,
+  canEditMediaItem,
   canEditCellAttendance,
   canManageEventsForUser,
   canManageDepartments,
@@ -2265,6 +2266,7 @@ app.get("/api/media", authMiddleware, requirePage("media"), async (req, res) => 
         shareTarget: m.share_target,
         shareTargetId: m.share_target_id,
         status: m.status || "approved",
+        uploadedBy: m.uploaded_by,
       }))
     );
   } catch (err) {
@@ -2356,22 +2358,139 @@ app.post("/api/media", authMiddleware, requirePage("media"), upload.single("file
   }
 });
 
-app.patch("/api/media/:id", authMiddleware, requirePage("media"), async (req, res) => {
-  const { status } = req.body;
-  if (!canApproveMedia(req.user.member.role)) {
-    return res.status(403).json({ error: "Only pastors can approve media" });
+app.patch("/api/media/:id", authMiddleware, requirePage("media"), upload.single("file"), async (req, res) => {
+  try {
+    const db = getDb();
+    const row = await db.prepare("SELECT * FROM media_items WHERE id = ?").get(req.params.id);
+    if (!row) return res.status(404).json({ error: "Media not found" });
+
+    const member = req.user.member;
+    const body = req.body || {};
+    const { status } = body;
+    const emptyToNull = (v) => (v == null || String(v).trim() === "" ? null : String(v).trim());
+
+    if (status !== undefined) {
+      if (!canApproveMedia(member.role)) {
+        return res.status(403).json({ error: "Only pastors can approve media" });
+      }
+      if (!["approved", "rejected"].includes(status)) {
+        return res.status(400).json({ error: "Status must be approved or rejected" });
+      }
+      await db.prepare(
+        "UPDATE media_items SET status = ?, approved_by = ?, approved_at = datetime('now') WHERE id = ?"
+      ).run(status, member.id, req.params.id);
+      await logActivity(db, `Media ${status}: ${req.params.id}`, member.id);
+      const onlyStatus =
+        Object.keys(body).length === 1 &&
+        !req.file;
+      if (onlyStatus) {
+        return res.json({ ok: true, status });
+      }
+    }
+
+    const metaTouched =
+      ["title", "type", "speaker", "series", "topic", "date", "shareTarget", "shareTargetId", "fileUrl", "videoUrl"].some(
+        (k) => body[k] !== undefined
+      ) || !!req.file;
+
+    if (!metaTouched) {
+      if (status === undefined) {
+        return res.status(400).json({ error: "No changes provided" });
+      }
+      return res.json({ ok: true, status });
+    }
+
+    if (!canEditMediaItem(member, row)) {
+      return res.status(403).json({ error: "You cannot edit this media item" });
+    }
+
+    const titleText = body.title !== undefined ? emptyToNull(body.title) : row.title;
+    if (!titleText) return res.status(400).json({ error: "Title is required" });
+
+    const mediaType = body.type !== undefined ? emptyToNull(body.type) : row.type;
+    if (!["audio", "video", "notes", "slides"].includes(mediaType)) {
+      return res.status(400).json({ error: "Invalid media type" });
+    }
+
+    let fileUrl = row.file_url;
+    let filePath = row.file_path;
+    if (req.file) {
+      fileUrl = await persistUploadedFile(
+        req.file.path,
+        "media",
+        req.file.originalname,
+        req.file.mimetype
+      );
+      filePath = req.file.path;
+    } else if (body.fileUrl !== undefined || body.videoUrl !== undefined) {
+      const external = String(body.fileUrl ?? body.videoUrl ?? "").trim();
+      if (external) {
+        if (!isGoogleDriveUrl(external)) {
+          return res.status(400).json({ error: "Video link must be a Google Drive share URL" });
+        }
+        const normalized = normalizeGoogleDriveUrl(external);
+        if (!normalized) {
+          return res.status(400).json({ error: "Could not parse Google Drive link" });
+        }
+        fileUrl = normalized;
+        filePath = null;
+      } else if (mediaType === "video") {
+        return res.status(400).json({ error: "Video requires a file or Google Drive link" });
+      }
+    }
+
+    const speaker = body.speaker !== undefined ? emptyToNull(body.speaker) : row.speaker;
+    const series = body.series !== undefined ? emptyToNull(body.series) : row.series;
+    const topic = body.topic !== undefined ? emptyToNull(body.topic) : row.topic;
+    const date =
+      body.date !== undefined ? emptyToNull(body.date) || row.date : row.date;
+    const shareTarget =
+      body.shareTarget !== undefined ? emptyToNull(body.shareTarget) : row.share_target;
+    const shareTargetId =
+      body.shareTargetId !== undefined ? emptyToNull(body.shareTargetId) : row.share_target_id;
+
+    if (mediaType === "video" && !fileUrl) {
+      return res.status(400).json({ error: "Video requires a file or Google Drive link" });
+    }
+    if (mediaType !== "video" && !fileUrl && !req.file) {
+      return res.status(400).json({ error: "Media file is missing" });
+    }
+
+    await db.prepare(
+      `UPDATE media_items SET title = ?, type = ?, speaker = ?, series = ?, topic = ?, date = ?,
+       file_path = ?, file_url = ?, share_target = ?, share_target_id = ? WHERE id = ?`
+    ).run(
+      titleText,
+      mediaType,
+      speaker,
+      series,
+      topic,
+      date,
+      filePath,
+      fileUrl,
+      shareTarget,
+      shareTargetId,
+      req.params.id
+    );
+    await logActivity(db, `Media updated: ${titleText}`, member.id);
+    res.json({
+      ok: true,
+      id: req.params.id,
+      title: titleText,
+      type: mediaType,
+      speaker,
+      series,
+      topic,
+      date,
+      fileUrl: mediaFileUrl({ file_url: fileUrl, file_path: filePath }),
+      shareTarget,
+      shareTargetId,
+      status: row.status,
+    });
+  } catch (err) {
+    console.error("PATCH /api/media/:id error:", err);
+    res.status(500).json({ error: err.message || "Failed to update media" });
   }
-  if (!["approved", "rejected"].includes(status)) {
-    return res.status(400).json({ error: "Status must be approved or rejected" });
-  }
-  const db = getDb();
-  const row = await db.prepare("SELECT id FROM media_items WHERE id = ?").get(req.params.id);
-  if (!row) return res.status(404).json({ error: "Media not found" });
-  await db.prepare(
-    "UPDATE media_items SET status = ?, approved_by = ?, approved_at = datetime('now') WHERE id = ?"
-  ).run(status, req.user.member.id, req.params.id);
-  await logActivity(db, `Media ${status}: ${req.params.id}`, req.user.member.id);
-  res.json({ ok: true, status });
 });
 
 // ─── Reports (analytics + cell reports) ────────────────────────────────────────

@@ -15,7 +15,7 @@ export function buildWebAppManifest(settings, req) {
       ]
     : [];
 
-  const name = branding.name || "Christ Embassy";
+  const name = branding.name || "Christ Embassy Airport City Jesus Brand";
   const shortName = name.length > 24 ? `${name.slice(0, 21)}…` : name;
 
   return {

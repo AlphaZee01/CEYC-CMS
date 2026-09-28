@@ -6,7 +6,8 @@
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/uploads/(.*)", "destination": "/api" },
-    { "source": "/manifest.webmanifest", "destination": "/api" }
+    { "source": "/manifest.webmanifest", "destination": "/api" },
+    { "source": "/((?!api/|uploads/|assets/|.*\\..*).*)", "destination": "/index.html" }
   ],
   "functions": {
     "api/index.js": {

@@ -14,7 +14,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: CHURCH_NAME
-        value: Christ Embassy LCM
+        value: Christ Embassy Airport City Jesus Brand
       - key: JWT_SECRET
         generateValue: true
       # Required — Supabase Postgres (set in Render dashboard)
