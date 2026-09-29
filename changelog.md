@@ -8,6 +8,7 @@
 - **White screen after deploy** — `scheduleSessionRefresh` referenced `refresh` before initialization (TDZ crash); helper is now declared after `refresh`.
 - **Login button stuck on Loading** — auth bootstrap no longer waits on `/api/auth/me` before showing the form; session restore runs in the background and bootstrap always clears the global loading flag.
 - **Sign-in spinner never stops** — block background session refresh during password sign-in (Supabase auth lock deadlock with `getSession`); cache access tokens from auth events; add API/auth timeouts and clearer 503 errors; Vercel API no longer blocks every request until DB bootstrap finishes.
+- **Vercel build** — export `getCachedSupabaseAccessToken` used by `AuthContext` (fixes Rollup PWA build error).
 
 ## [2026-09-28] — Dedicated GitHub repo setup
 

@@ -61,6 +61,10 @@ export function isPasswordSignInInProgress() {
   return passwordSignInInProgress;
 }
 
+export function getCachedSupabaseAccessToken() {
+  return cachedAccessToken;
+}
+
 export function setCachedSupabaseAccessToken(token: string | null) {
   cachedAccessToken = token;
 }
