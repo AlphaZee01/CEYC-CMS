@@ -1,8 +1,15 @@
 import { getSupabaseAccessToken } from "@/lib/supabase";
 import { useSupabaseForAuth } from "@/lib/auth-mode";
 import { authLog } from "@/lib/auth-log";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 
 const API_BASE = "/api";
+const AUTH_FETCH_TIMEOUT_MS = 55_000;
+const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
+
+function fetchTimeoutForPath(path: string) {
+  return path.startsWith("/auth/") ? AUTH_FETCH_TIMEOUT_MS : DEFAULT_FETCH_TIMEOUT_MS;
+}
 
 function getLegacyToken() {
   return localStorage.getItem("celcm_token");
@@ -25,7 +32,11 @@ export async function publicApi<T>(path: string, options: RequestInit = {}): Pro
   if (!(options.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
   }
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const res = await fetchWithTimeout(
+    `${API_BASE}${path}`,
+    { ...options, headers },
+    fetchTimeoutForPath(path)
+  );
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data as T;
@@ -45,8 +56,19 @@ export async function apiWithBearer<T>(
   }
   headers.Authorization = `Bearer ${bearerToken}`;
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const res = await fetchWithTimeout(
+    `${API_BASE}${path}`,
+    { ...options, headers },
+    fetchTimeoutForPath(path)
+  );
   const data = await res.json().catch(() => ({}));
+
+  if (res.status === 503) {
+    throw new Error(
+      (data.error as string) ||
+        "Database is still starting. Wait a moment and try again, or check API logs on the server."
+    );
+  }
 
   if (res.status === 401) {
     const message = (data.error as string) || "Session expired";
@@ -77,8 +99,19 @@ export async function api<T>(
   }
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const res = await fetchWithTimeout(
+    `${API_BASE}${path}`,
+    { ...options, headers },
+    fetchTimeoutForPath(path)
+  );
   const data = await res.json().catch(() => ({}));
+
+  if (res.status === 503) {
+    throw new Error(
+      (data.error as string) ||
+        "Database is still starting. Wait a moment and try again, or check API logs on the server."
+    );
+  }
 
   if (res.status === 401) {
     const message = (data.error as string) || "Session expired";

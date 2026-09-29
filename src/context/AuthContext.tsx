@@ -8,6 +8,10 @@ import {
   clearStaleSupabaseSession,
   ensureValidSupabaseSession,
   isRefreshTokenError,
+  beginPasswordSignIn,
+  endPasswordSignIn,
+  getCachedSupabaseAccessToken,
+  setCachedSupabaseAccessToken,
 } from "@/lib/supabase";
 import type { AuthUser, PageId } from "@/types/church";
 import {
@@ -85,6 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refresh = useCallback(async () => {
+    if (signInFlowRef.current) return;
     if (refreshPromiseRef.current) return refreshPromiseRef.current;
 
     refreshPromiseRef.current = (async () => {
@@ -132,8 +137,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         if (mode === "supabase" && supabase) {
           await ensureValidSupabaseSession();
-          const { data: { session: initialSession } } = await supabase.auth.getSession();
-          if (mounted && !initialSession) {
+          const hasPersistedSession = !!getCachedSupabaseAccessToken();
+          if (mounted && !hasPersistedSession) {
             setUser(null);
             setPages([]);
             setDepartmentAbilities([]);
@@ -161,7 +166,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           });
 
-          if (mounted && initialSession) void refresh();
+          if (mounted && hasPersistedSession) void refresh();
           return () => subscription.unsubscribe();
         }
 
@@ -182,33 +187,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string) => {
     authLogStart(`Sign-in: ${email}`);
-    await loadAuthMode();
+    signInFlowRef.current = true;
+    beginPasswordSignIn();
+    try {
+      await loadAuthMode();
 
-    if (useSupabaseForAuth()) {
-      signInFlowRef.current = true;
-      try {
+      if (useSupabaseForAuth()) {
+        if (!supabase) {
+          throw new Error(
+            "Supabase Auth is enabled on the server but VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are missing in the client build."
+          );
+        }
         const session = await authLogTimed("Supabase signInWithPassword", () =>
           signInWithEmail(email, password)
         );
+        setCachedSupabaseAccessToken(session.access_token);
         const data = await authLogTimed("GET /api/auth/me", () =>
           authApi.meWithBearer(session.access_token)
         );
         applySession(setUser, setPages, setDepartmentAbilities, setBranding, data);
         authLog("Sign-in complete");
-      } finally {
-        signInFlowRef.current = false;
+        return;
       }
-      return;
-    }
 
-    const { token, user: u } = await authLogTimed("POST /api/auth/login", () => authApi.login(email, password));
-    setToken(token);
-    setUser(u as AuthUser);
-    const me = await authLogTimed("GET /api/auth/me", () => authApi.me());
-    setPages(me.pages as PageId[]);
-    setDepartmentAbilities(me.departmentAbilities || []);
-    applyBranding(setBranding, me.branding);
-    authLog("Sign-in complete");
+      const { token, user: u } = await authLogTimed("POST /api/auth/login", () =>
+        authApi.login(email, password)
+      );
+      setToken(token);
+      setUser(u as AuthUser);
+      const me = await authLogTimed("GET /api/auth/me", () => authApi.me());
+      setPages(me.pages as PageId[]);
+      setDepartmentAbilities(me.departmentAbilities || []);
+      applyBranding(setBranding, me.branding);
+      authLog("Sign-in complete");
+    } finally {
+      signInFlowRef.current = false;
+      endPasswordSignIn();
+    }
   };
 
   const syncBranding = useCallback((next: ChurchBranding) => {

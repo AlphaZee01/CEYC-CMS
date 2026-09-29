@@ -5,14 +5,18 @@ export const config = {
   maxDuration: 60,
 };
 
-let ready = false;
 let handler;
+let bootstrapPromise = null;
+
+function startBootstrap() {
+  if (!bootstrapPromise) {
+    bootstrapPromise = bootstrapDatabase();
+  }
+  return bootstrapPromise;
+}
 
 export default async function vercelHandler(req, res) {
-  if (!ready) {
-    await bootstrapDatabase();
-    ready = true;
-  }
+  startBootstrap();
   if (!handler) {
     handler = serverless(app);
   }
