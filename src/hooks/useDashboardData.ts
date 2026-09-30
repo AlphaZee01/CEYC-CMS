@@ -183,9 +183,10 @@ async function fetchDashboardSnapshot(args: {
     }
   }
 
-  const [actsResult, primaryResult, eventsResult, announcementsResult] = await Promise.all([
+  const primaryResult = await fetchOptional<DashboardOverview | DashboardStats>(primaryPath);
+
+  const [actsResult, eventsResult, announcementsResult] = await Promise.all([
     fetchOptional<DashboardActivity[]>("/activities"),
-    fetchOptional<DashboardOverview | DashboardStats>(primaryPath),
     showEvents ? fetchOptional<DashboardEvent[]>("/events") : Promise.resolve(null),
     showAnnouncements ? fetchOptional<DashboardAnnouncementItem[]>("/announcements") : Promise.resolve(null),
   ]);

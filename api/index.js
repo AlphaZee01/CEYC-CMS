@@ -3,6 +3,8 @@ import { handleLightPublic, matchLightPublicPath } from "./light-public.js";
 import { handleLightAuthMe, matchLightAuthMePath } from "./light-auth-me.js";
 import { handleLightAuthSignup, matchLightAuthSignupPath } from "./light-auth-signup.js";
 import { handleLightDashboardStats, matchLightDashboardStatsPath } from "./light-dashboard-stats.js";
+import { handleLightActivities, matchLightActivitiesPath } from "./light-activities.js";
+import { handleLightAnnouncements, matchLightAnnouncementsPath } from "./light-announcements.js";
 import { handleLightBootstrap, matchLightBootstrapPath } from "./light-bootstrap.js";
 
 export const config = {
@@ -55,6 +57,18 @@ export default async function vercelHandler(req, res) {
   if (matchLightDashboardStatsPath(req)) {
     void startBootstrap();
     await handleLightDashboardStats(req, res);
+    return;
+  }
+
+  if (matchLightActivitiesPath(req)) {
+    void startBootstrap();
+    await handleLightActivities(req, res);
+    return;
+  }
+
+  if (matchLightAnnouncementsPath(req)) {
+    void startBootstrap();
+    await handleLightAnnouncements(req, res);
     return;
   }
 

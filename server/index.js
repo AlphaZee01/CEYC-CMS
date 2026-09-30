@@ -54,6 +54,12 @@ import { canViewBirthdays, getBirthdaysForMonth } from "./birthdays.js";
 import { syncAuthUsers, createSupabaseAuthUser, updateSupabaseAuthPassword } from "./auth-sync.js";
 import { registerPublicUser } from "./public-signup.js";
 import { buildDashboardStats } from "./dashboard-stats.js";
+import { listRecentActivities } from "./activities-feed.js";
+import {
+  announcementToJson,
+  filterAnnouncementsForMember,
+  listAnnouncementsForUser,
+} from "./announcements-feed.js";
 import { useSupabaseAuth } from "./supabase.js";
 import { persistUploadedFile, brandingFromSettings, normalizeLogoUrlForStorage } from "./storage.js";
 import { buildBootstrapPayload, departmentToJson } from "./bootstrap-payload.js";
@@ -1873,67 +1879,8 @@ function normalizeAnnouncementTarget(target, targetId, targetRole) {
   return { targetId: targetId || null, targetRole: null };
 }
 
-function announcementToJson(a) {
-  return {
-    id: a.id,
-    title: a.title,
-    content: a.content,
-    target: a.target,
-    targetId: a.target_id,
-    targetRole: a.target_role,
-    pinned: !!a.pinned,
-    expiresAt: a.expires_at,
-    createdAt: a.created_at,
-    createdBy: a.created_by,
-  };
-}
-
-async function filterAnnouncementsForMember(db, member, departmentAbilities, rows) {
-  const canManage = canPostAnnouncementsForUser(member.role, departmentAbilities);
-  const filtered = [];
-  for (const a of rows) {
-    if (canManage) {
-      filtered.push(a);
-      continue;
-    }
-    if (a.target === "all") {
-      filtered.push(a);
-      continue;
-    }
-    if (a.target === "fellowship" && a.target_id === member.fellowshipId) {
-      filtered.push(a);
-      continue;
-    }
-    if (a.target === "cell" && a.target_id === member.cellId) {
-      filtered.push(a);
-      continue;
-    }
-    if (a.target === "department") {
-      const inDept = await db
-        .prepare("SELECT 1 FROM member_departments WHERE member_id = ? AND department_id = ?")
-        .get(member.id, a.target_id);
-      if (inDept) filtered.push(a);
-      continue;
-    }
-    if (a.target === "role" && a.target_role === member.role) filtered.push(a);
-    if (a.target === "leaders" && (await receivesLeadersAnnouncement(db, member))) filtered.push(a);
-  }
-  return filtered;
-}
-
 app.get("/api/announcements", authMiddleware, requirePage("announcements"), async (req, res) => {
-  const db = getDb();
-  const m = req.user.member;
-  const canManage = canPostAnnouncementsForUser(m.role, req.user.departmentAbilities);
-  const all = await db
-    .prepare(
-      canManage
-        ? "SELECT * FROM announcements ORDER BY pinned DESC, created_at DESC"
-        : "SELECT * FROM announcements WHERE expires_at >= date('now') ORDER BY pinned DESC, created_at DESC"
-    )
-    .all();
-  const filtered = await filterAnnouncementsForMember(db, m, req.user.departmentAbilities || [], all);
-  res.json(filtered.map(announcementToJson));
+  res.json(await listAnnouncementsForUser(getDb(), req.user));
 });
 
 app.post("/api/announcements", authMiddleware, requirePage("announcements"), async (req, res) => {
@@ -2676,9 +2623,7 @@ app.post("/api/users", authMiddleware, async (req, res) => {
 // ─── Activities & Notifications ────────────────────────────────────────────────
 
 app.get("/api/activities", authMiddleware, async (req, res) => {
-  const db = getDb();
-  const rows = await db.prepare("SELECT * FROM activities ORDER BY created_at DESC LIMIT 30").all();
-  res.json(rows.map((a) => ({ id: a.id, text: a.text, time: a.created_at })));
+  res.json(await listRecentActivities(getDb()));
 });
 
 app.get("/api/notifications", authMiddleware, async (req, res) => {

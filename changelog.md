@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-09-30] — Dashboard activities & announcements on Vercel
+
+### Fixed
+- **`GET /api/activities`** and **`GET /api/announcements`** — lightweight Vercel handlers (dashboard no longer waits 30s on Express cold start).
+- **Dashboard fetch** — loads stats/overview first, then parallel activities/announcements.
+
 ## [2026-09-30] — Dashboard stats on Vercel
 
 ### Fixed
