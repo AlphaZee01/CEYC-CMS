@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-09-30] — Dashboard stats on Vercel
+
+### Fixed
+- **`GET /api/dashboard/stats`** — lightweight Vercel handler (`api/light-dashboard-stats.js`) so Church Member / cell dashboards load without waiting for full Express cold start.
+- **Client** — longer timeout for `/dashboard/*`; if stats API fails but bootstrap already has counts, show those without a scary toast.
+
 ## [2026-09-30] — PWA service worker cache errors
 
 ### Fixed

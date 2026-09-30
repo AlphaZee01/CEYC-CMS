@@ -10,7 +10,9 @@ const PUBLIC_CONFIG_TIMEOUT_MS = 8_000;
 
 function fetchTimeoutForPath(path: string) {
   if (path.includes("public/config")) return PUBLIC_CONFIG_TIMEOUT_MS;
-  if (path.startsWith("/auth/") || path.includes("bootstrap")) return SLOW_API_TIMEOUT_MS;
+  if (path.startsWith("/auth/") || path.includes("bootstrap") || path.includes("dashboard/")) {
+    return SLOW_API_TIMEOUT_MS;
+  }
   return DEFAULT_FETCH_TIMEOUT_MS;
 }
 

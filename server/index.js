@@ -53,6 +53,7 @@ import { ensureBirthdayData } from "./birthday-seed.js";
 import { canViewBirthdays, getBirthdaysForMonth } from "./birthdays.js";
 import { syncAuthUsers, createSupabaseAuthUser, updateSupabaseAuthPassword } from "./auth-sync.js";
 import { registerPublicUser } from "./public-signup.js";
+import { buildDashboardStats } from "./dashboard-stats.js";
 import { useSupabaseAuth } from "./supabase.js";
 import { persistUploadedFile, brandingFromSettings, normalizeLogoUrlForStorage } from "./storage.js";
 import { buildBootstrapPayload, departmentToJson } from "./bootstrap-payload.js";
@@ -2996,45 +2997,13 @@ app.get("/api/dashboard/birthdays", authMiddleware, requirePage("dashboard"), as
 });
 
 app.get("/api/dashboard/stats", authMiddleware, requirePage("dashboard"), async (req, res) => {
-  const db = getDb();
-  const actor = req.user.member;
-  const scope = scopeMemberFilter({
-    id: actor.id,
-    role: actor.role,
-    fellowship_id: actor.fellowshipId,
-    cell_id: actor.cellId,
-  });
-
-  if (isCellScopedRole(actor.role)) {
-    const m = await db.prepare(`SELECT COUNT(*) as c FROM members m WHERE m.active = 1 AND ${scope.sql}`).get(...scope.params);
-    const lastCell = await db
-      .prepare(
-        `SELECT ar.date FROM attendance_records ar
-         WHERE ar.type = 'cell' AND ar.cell_id = ? ORDER BY ar.date DESC LIMIT 1`
-      )
-      .get(actor.cellId);
-    return res.json({
-      members: Number(m?.c ?? 0),
-      cells: 1,
-      fellowships: 1,
-      departments: 0,
-      lastCellMeeting: lastCell?.date || null,
-      scoped: "cell",
-    });
+  try {
+    const result = await buildDashboardStats(getDb(), req.user);
+    res.status(result.status).json(result.body);
+  } catch (err) {
+    console.error("[dashboard/stats]", err);
+    res.status(500).json({ error: "Failed to load dashboard stats" });
   }
-
-  const [m, c, f, d] = await Promise.all([
-    db.prepare("SELECT COUNT(*) as c FROM members WHERE active = 1").get(),
-    db.prepare("SELECT COUNT(*) as c FROM cells").get(),
-    db.prepare("SELECT COUNT(*) as c FROM fellowships").get(),
-    db.prepare("SELECT COUNT(*) as c FROM departments").get(),
-  ]);
-  res.json({
-    members: Number(m?.c ?? 0),
-    cells: Number(c?.c ?? 0),
-    fellowships: Number(f?.c ?? 0),
-    departments: Number(d?.c ?? 0),
-  });
 });
 
 registerCompletionRoutes(app, { upload, uid, getMemberDepartments, loadMember, UPLOAD_DIR });

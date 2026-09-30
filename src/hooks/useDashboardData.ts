@@ -221,8 +221,14 @@ async function fetchDashboardSnapshot(args: {
     stats = primaryResult as DashboardStats;
   } else {
     dataSource = "fallback";
-    toast.error("Could not load dashboard stats");
     stats = applyBootstrapStats();
+    const hasBootstrapCounts =
+      stats.members > 0 || stats.cells > 0 || stats.fellowships > 0 || stats.departments > 0;
+    if (!hasBootstrapCounts) {
+      toast.error("Could not load dashboard stats");
+    } else {
+      dashboardLog("stats API failed", "using bootstrap member/cell counts");
+    }
   }
 
   if (announcementsResult) dashboardAnnouncements = announcementsResult.slice(0, 5);
