@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-09-30] — Prayer submit modal
+
+### Changed
+- **Prayer** — “Submit request” opens a modal from the page header (inline form card removed).
+
 ## [2026-09-30] — Dashboard activities & announcements on Vercel
 
 ### Fixed

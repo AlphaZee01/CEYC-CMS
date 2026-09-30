@@ -3950,9 +3950,12 @@ export function PrayerPage({ members, currentUser }: PageProps) {
     { initialData: [] }
   );
   const [form, setForm] = useState({ title: "", content: "", visibility: "public" as "public" | "team" });
+  const [submitOpen, setSubmitOpen] = useState(false);
   const [filter, setFilter] = useState<PrayerFilter>("all");
   const [submitting, setSubmitting] = useState(false);
   const [respondingId, setRespondingId] = useState<string | null>(null);
+
+  const resetPrayerForm = () => setForm({ title: "", content: "", visibility: "public" });
 
   const viewPrivate = canViewPrivatePrayers(currentUser.role, departmentAbilities);
   const canRespond = canManagePrayerForUser(currentUser.role, departmentAbilities);
@@ -3990,7 +3993,8 @@ export function PrayerPage({ members, currentUser }: PageProps) {
           ? "Request sent to the prayer & intercession team"
           : "Request shared with the church"
       );
-      setForm({ title: "", content: "", visibility: "public" });
+      resetPrayerForm();
+      setSubmitOpen(false);
       reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to submit request");
@@ -4025,11 +4029,22 @@ export function PrayerPage({ members, currentUser }: PageProps) {
         {...pageHeaderProps("prayer")}
         title="Prayer Requests"
         subtitle="Share needs with the church or send privately to the prayer & intercession team"
-        action={mergePageHeaderAction(prayersRefreshing)}
+        action={mergePageHeaderAction(
+          prayersRefreshing,
+          <Btn onClick={() => setSubmitOpen(true)}>
+            <Plus className="h-4 w-4" /> Submit request
+          </Btn>
+        )}
       />
 
-      <Card>
-        <h2 className="mb-1 font-semibold">Submit a prayer request</h2>
+      <Modal
+        open={submitOpen}
+        onClose={() => {
+          if (submitting) return;
+          setSubmitOpen(false);
+        }}
+        title="Submit a prayer request"
+      >
         <p className="mb-4 text-sm text-muted-foreground">
           Every member can submit requests. Choose who can see your need.
         </p>
@@ -4078,11 +4093,23 @@ export function PrayerPage({ members, currentUser }: PageProps) {
               </div>
             </label>
           </div>
+        </div>
+        <ModalFooter>
+          <Btn
+            variant="ghost"
+            disabled={submitting}
+            onClick={() => {
+              setSubmitOpen(false);
+              resetPrayerForm();
+            }}
+          >
+            Cancel
+          </Btn>
           <Btn onClick={submit} disabled={submitting}>
             {submitting ? "Submitting…" : "Submit request"}
           </Btn>
-        </div>
-      </Card>
+        </ModalFooter>
+      </Modal>
 
       <div className="space-y-3">
         <TabBar tabs={filterTabs} value={filter} onChange={setFilter} />

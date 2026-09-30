@@ -256,13 +256,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signup = async (name: string, email: string, password: string, phone?: string) => {
     const emailNorm = email.trim().toLowerCase();
-    await authApi.signup({
-      name: name.trim(),
-      email: emailNorm,
-      password,
-      phone,
-    });
-    await login(emailNorm, password);
+    authLogStart(`Sign-up: ${emailNorm}`);
+    try {
+      await authLogTimed("POST /api/auth/signup", () =>
+        authApi.signup({
+          name: name.trim(),
+          email: emailNorm,
+          password,
+          phone,
+        })
+      );
+      authLog("signup()", "account created; signing in");
+      await login(emailNorm, password);
+      authLog("signup()", "complete");
+    } catch (err) {
+      authLogError("signup() failed", err);
+      throw err;
+    }
   };
 
   const syncBranding = useCallback((next: ChurchBranding) => {
