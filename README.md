@@ -96,9 +96,17 @@ npm start
 
 ## Deploy on Vercel
 
-Frontend + API as a **serverless** deployment. Requires **Supabase Postgres** (and recommended: Supabase Auth + Storage).
+Frontend + API as **serverless** (see `vercel.json` + `api/index.js`). Requires **Supabase Postgres**, **Supabase Auth**, and **Storage** for production uploads.
 
-See **[docs/VERCEL.md](docs/VERCEL.md)** for environment variables, Supabase redirect URLs, and seeding.
+### Quick steps
+
+1. **[vercel.com/new](https://vercel.com/new)** → Import **`AlphaZee01/CEYC-CMS`** (`main`).
+2. Add **environment variables** from your `.env` (especially `VITE_SUPABASE_*` and `VITE_USE_SUPABASE_AUTH` — needed at **build** time).
+3. **Deploy**, then set **`APP_URL`** to your `https://….vercel.app` URL and **Redeploy**.
+4. **Supabase → Auth → URL Configuration:** Site URL + `…/reset-password` redirect.
+5. Locally (once): `npm run db:seed` and `npm run auth:sync` against the same Supabase project.
+
+Full variable list, CLI (`npm run vercel:deploy`), and troubleshooting: **[docs/VERCEL.md](docs/VERCEL.md)**.
 
 ## Deploy on Render (Web Service)
 

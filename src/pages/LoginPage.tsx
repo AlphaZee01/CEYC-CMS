@@ -8,9 +8,11 @@ import { useSupabaseForAuth } from "@/lib/auth-mode";
 import { fetchPublicBranding, getCachedBranding } from "@/lib/branding";
 import { Btn, Input } from "@/components/church/ui";
 import { ChurchBrand } from "@/components/church/ChurchBrand";
+import { authLog, authLogError } from "@/lib/auth-log";
+import { getAuthMode } from "@/lib/auth-mode";
 
 export default function LoginPage() {
-  const { login, user } = useAuth();
+  const { login, user, loading: authLoading } = useAuth();
   const [branding, setBranding] = useState(getCachedBranding);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -28,13 +30,22 @@ export default function LoginPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
+    authLog("LoginPage submit", `authLoading=${authLoading} mode=${getAuthMode()}`);
+    if (authLoading) {
+      authLog("LoginPage submit blocked", "auth still bootstrapping");
+      setError("Still loading — wait a moment and try again.");
+      return;
+    }
     setLoading(true);
     try {
       await login(email, password);
+      authLog("LoginPage submit", "success → redirect");
     } catch (err) {
+      authLogError("LoginPage submit", err);
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
       setLoading(false);
+      authLog("LoginPage submit", "button loading=false");
     }
   };
 
@@ -138,9 +149,9 @@ export default function LoginPage() {
               <Input label="Email address" value={email} onChange={setEmail} type="email" placeholder="pastor@celcm.org" />
               <Input label="Password" value={password} onChange={setPassword} type="password" placeholder="••••••••" />
               {error && <p className="rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
-              <Btn type="submit" className="w-full gap-2" disabled={loading}>
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-                {loading ? "Signing in..." : "Continue"}
+              <Btn type="submit" className="w-full gap-2" disabled={loading || authLoading}>
+                {loading || authLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                {authLoading ? "Loading..." : loading ? "Signing in..." : "Continue"}
               </Btn>
               <div className="flex items-center justify-between text-sm">
                 <button

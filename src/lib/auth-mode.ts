@@ -1,5 +1,6 @@
 import { publicApi } from "@/lib/api";
-import { supabaseAuthEnabled } from "@/lib/supabase";
+import { authLog, authLogError } from "@/lib/auth-log";
+import { supabaseAuthEnabled, supabaseConfigured } from "@/lib/supabase";
 
 export type AuthMode = "jwt" | "supabase";
 
@@ -15,22 +16,26 @@ export async function loadAuthMode(): Promise<AuthMode> {
   loadPromise = (async () => {
     const retries = [0, 400, 1200];
     let lastError: unknown;
+    authLog("loadAuthMode", `supabaseConfigured=${supabaseConfigured} viteAuth=${supabaseAuthEnabled}`);
     for (const delayMs of retries) {
-      if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+      if (delayMs > 0) {
+        authLog("loadAuthMode retry", `wait ${delayMs}ms`);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
       try {
         const config = await publicApi<{ authMode: AuthMode }>("/public/config");
         authMode = config.authMode === "supabase" ? "supabase" : "jwt";
         loaded = true;
+        authLog("loadAuthMode ok", authMode);
         return authMode;
       } catch (err) {
         lastError = err;
+        authLogError("loadAuthMode attempt failed", err);
       }
     }
     const fallback = supabaseAuthEnabled ? "supabase" : "jwt";
-    console.warn(
-      `[auth] Could not load /api/public/config; using ${fallback} login from client env.`,
-      lastError
-    );
+    authLogError("loadAuthMode using fallback", lastError);
+    authLog("loadAuthMode fallback", fallback);
     authMode = fallback;
     loaded = true;
     return authMode;

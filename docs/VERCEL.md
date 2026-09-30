@@ -5,68 +5,112 @@ This app deploys as a **Vite static frontend** plus a **single serverless API** 
 ## Requirements
 
 - **Supabase Postgres** — required (`USE_SUPABASE_DB=true`). SQLite does not work on Vercel.
-- **Supabase Auth** — recommended (`USE_SUPABASE_AUTH=true`).
+- **Supabase Auth** — recommended (`USE_SUPABASE_AUTH=true` + `VITE_USE_SUPABASE_AUTH=true`).
 - **Supabase Storage** — recommended for uploads (`USE_SUPABASE_STORAGE=true`). Local `uploads/` is ephemeral on serverless.
 
-## Option A — GitHub (recommended)
+---
 
-1. **Commit and push** your branch to GitHub (this repo: `AlphaZee01/the-style-edit`).
-2. Open [vercel.com/new](https://vercel.com/new) → **Import** the repository.
-3. **Root directory**: project root (where `vercel.json` lives).
-4. Framework: **Vite** (auto-detected from `vercel.json`).
-5. Add **Environment variables** (Production **and** Preview) — see table below.
-6. **Deploy**. Copy the production URL (e.g. `https://ceyc-cms.vercel.app`).
-7. In Vercel → **Settings → Environment variables**, set **`APP_URL`** to that URL (no trailing slash), then **Redeploy**.
-8. In **Supabase → Authentication → URL Configuration**:
-   - **Site URL**: your `APP_URL`
-   - **Redirect URLs**: `https://your-app.vercel.app/reset-password`
-9. Log in on production with a user from `npm run auth:sync` (run locally against the same Supabase project).
+## Step 1 — Import from GitHub (recommended)
 
-## Option B — Vercel CLI (from this machine)
+1. Open **[vercel.com/new](https://vercel.com/new)** and sign in with GitHub.
+2. **Import** repository **`AlphaZee01/CEYC-CMS`** (branch **`main`**).
+3. Leave **Root Directory** empty (project root).
+4. Vercel should detect **Vite** from `vercel.json`:
+   - **Build Command:** `npm run build`
+   - **Output Directory:** `dist`
+5. **Do not deploy yet** — add environment variables first (Step 2).
+
+---
+
+## Step 2 — Environment variables
+
+In the import screen (or later: **Project → Settings → Environment variables**), add **Production** and **Preview** for each row below.
+
+Copy values from your local `.env` (same Supabase project as dev).
+
+| Variable | Required | Notes |
+|----------|----------|--------|
+| `USE_SUPABASE_DB` | Yes | `true` |
+| `SUPABASE_DB_PASSWORD` | Yes | Database password |
+| `SUPABASE_PROJECT_REF` | Yes | e.g. `gilcsmnyeuxwuvpxowik` |
+| `SUPABASE_DB_REGION` | Yes | e.g. `us-west-1` |
+| `SUPABASE_POOLER_AWS_CLUSTER` | Often | `1` if pooler host is `aws-1-{region}` |
+| `USE_SUPABASE_AUTH` | Yes | `true` |
+| `VITE_USE_SUPABASE_AUTH` | Yes | `true` (baked into frontend at **build**) |
+| `SUPABASE_URL` | Yes | `https://xxxx.supabase.co` |
+| `SUPABASE_ANON_KEY` | Yes | Anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Server only — never expose in client |
+| `VITE_SUPABASE_URL` | Yes | Same as `SUPABASE_URL` (build-time) |
+| `VITE_SUPABASE_ANON_KEY` | Yes | Same as anon key (build-time) |
+| `USE_SUPABASE_STORAGE` | Recommended | `true` |
+| `SUPABASE_BUCKET_MEDIA` | Recommended | `church-media` |
+| `JWT_SECRET` | Yes | Long random string |
+| `CHURCH_NAME` | Yes | Display name |
+| `APP_URL` | After 1st deploy | `https://your-project.vercel.app` (no trailing slash) |
+
+Optional: `SMTP_*` for password-reset email (otherwise reset may return a dev token in API responses).
+
+Click **Deploy**.
+
+---
+
+## Step 3 — After the first deploy
+
+1. Copy your production URL (e.g. `https://ceyc-cms.vercel.app`).
+2. In Vercel → **Settings → Environment variables**, set **`APP_URL`** to that URL (Production + Preview).
+3. **Deployments → … → Redeploy** (so the API and emails use the correct URL).
+4. In **Supabase → Authentication → URL Configuration**:
+   - **Site URL:** your `APP_URL`
+   - **Redirect URLs:** add  
+     `https://your-project.vercel.app/reset-password`  
+     `https://your-project.vercel.app/**` (optional, for auth callbacks)
+5. Test:
+   - `https://your-project.vercel.app/api/health` → `{ "ok": true, "database": "supabase" }`
+   - Open `/` and sign in (users from `npm run auth:sync` on your machine, same Supabase project).
+
+---
+
+## Step 4 — Data (one time, local machine)
+
+Against the **same** Supabase database:
 
 ```bash
+npm run db:seed
+npm run auth:sync
+```
+
+---
+
+## Option B — Vercel CLI (from your PC)
+
+```bash
+cd "path/to/CEYC CMS"
 npx vercel login
 npx vercel link
 npm run vercel:env
-npx vercel --prod
+npm run vercel:deploy
 ```
 
-Then set **`APP_URL`** on Vercel to the production URL and redeploy (step 7–8 above).
+Then complete **Step 3** (`APP_URL` + Supabase redirect URLs + redeploy).
 
-## Environment variables
+`npm run vercel:env` reads `.env` and pushes listed keys to Vercel (skips `PORT`, `SEED_PASSWORD`, `DATABASE_URL`).
 
-Add these in the Vercel dashboard (Production + Preview):
+---
 
-| Variable | Notes |
-|----------|--------|
-| `USE_SUPABASE_DB` | `true` |
-| `SUPABASE_DB_PASSWORD` | Database password |
-| `SUPABASE_PROJECT_REF` | e.g. `gilcsmnyeuxwuvpxowik` |
-| `SUPABASE_DB_REGION` | e.g. `us-west-1` |
-| `SUPABASE_POOLER_AWS_CLUSTER` | `1` if pooler host is `aws-1-{region}` |
-| `USE_SUPABASE_AUTH` | `true` |
-| `SUPABASE_URL` | Project URL |
-| `SUPABASE_ANON_KEY` | Anon key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service role (server only) |
-| `VITE_SUPABASE_URL` | Same as `SUPABASE_URL` |
-| `VITE_SUPABASE_ANON_KEY` | Same as anon key |
-| `USE_SUPABASE_STORAGE` | `true` |
-| `JWT_SECRET` | Random string (legacy JWT fallback) |
-| `CHURCH_NAME` | Display name |
-| `APP_URL` | `https://your-project.vercel.app` (your production URL) |
+## Troubleshooting
 
-4. Deploy. After first deploy, in **Supabase → Authentication → URL Configuration**, add:
-   - Site URL: `https://your-project.vercel.app`
-   - Redirect URLs: `https://your-project.vercel.app/reset-password`
+| Symptom | Fix |
+|---------|-----|
+| Login uses JWT / “Use Supabase Auth” error | Set `VITE_USE_SUPABASE_AUTH=true` and **redeploy** (Vite env vars need a new build). |
+| `/api/*` 500 or 503 | Check Vercel **Functions** logs; verify `SUPABASE_DB_*` and pooler region/cluster. |
+| Uploads fail | Use `USE_SUPABASE_STORAGE=true` and `SUPABASE_SERVICE_ROLE_KEY`. |
+| Wrong church name on login | Set `CHURCH_NAME` or update **Settings** in the app; clear browser cache. |
+| Health `database: unavailable` | DB password/ref/region wrong, or cold start still bootstrapping — retry `/api/health`. |
 
-5. One-time data: run locally against the same Supabase DB:
-   ```bash
-   npm run db:seed
-   npm run auth:sync
-   ```
+---
 
 ## Notes
 
-- **Background jobs** (overdue report emails) do not run on Vercel. Use [Vercel Cron](https://vercel.com/docs/cron-jobs) or an external scheduler calling an API route if you add one later.
-- **Function timeout**: default 60s on the API (`vercel.json`). Heavy reports may need Pro limits or optimization.
-- **Local dev** is unchanged: `npm run dev` (Vite + Node API on :3001).
+- **Background jobs** (overdue report emails) do not run on Vercel. Use [Vercel Cron](https://vercel.com/docs/cron-jobs) later if needed.
+- **Function timeout:** 60s on the API (`vercel.json`).
+- **Local dev** unchanged: `npm run dev` (Vite :8080 + API :3001).

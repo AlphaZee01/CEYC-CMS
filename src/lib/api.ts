@@ -1,6 +1,6 @@
 import { getSupabaseAccessToken } from "@/lib/supabase";
 import { useSupabaseForAuth } from "@/lib/auth-mode";
-import { authLog } from "@/lib/auth-log";
+import { authLog, authLogHttp, authDebugEnabled } from "@/lib/auth-log";
 import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 
 const API_BASE = "/api";
@@ -32,12 +32,13 @@ export async function publicApi<T>(path: string, options: RequestInit = {}): Pro
   if (!(options.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
   }
-  const res = await fetchWithTimeout(
-    `${API_BASE}${path}`,
-    { ...options, headers },
-    fetchTimeoutForPath(path)
-  );
+  const url = `${API_BASE}${path}`;
+  const started = performance.now();
+  const res = await fetchWithTimeout(url, { ...options, headers }, fetchTimeoutForPath(path));
   const data = await res.json().catch(() => ({}));
+  if (authDebugEnabled && (path.includes("auth") || path.includes("public/config"))) {
+    authLogHttp(options.method || "GET", path, res.status, Math.round(performance.now() - started), data.error as string);
+  }
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data as T;
 }
@@ -56,12 +57,16 @@ export async function apiWithBearer<T>(
   }
   headers.Authorization = `Bearer ${bearerToken}`;
 
+  const started = performance.now();
   const res = await fetchWithTimeout(
     `${API_BASE}${path}`,
     { ...options, headers },
     fetchTimeoutForPath(path)
   );
   const data = await res.json().catch(() => ({}));
+  if (authDebugEnabled) {
+    authLogHttp(options.method || "GET", path, res.status, Math.round(performance.now() - started), data.error as string);
+  }
 
   if (res.status === 503) {
     throw new Error(

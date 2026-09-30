@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-09-30] — Sign-in debug logging
+
+### Added
+- **`VITE_AUTH_DEBUG=true`** — verbose `[sign-in +Nms]` console logs on production/Vercel (HTTP status for `/api/auth/*` and `/api/public/config`, Supabase steps, login page flow).
+- **Login** — Continue disabled while auth bootstrap runs; clearer log when submit is blocked.
+
 ## [2026-09-28] — Sign-in spinner stuck on Continue
 
 ### Fixed
@@ -9,6 +15,11 @@
 - **Login button stuck on Loading** — auth bootstrap no longer waits on `/api/auth/me` before showing the form; session restore runs in the background and bootstrap always clears the global loading flag.
 - **Sign-in spinner never stops** — block background session refresh during password sign-in (Supabase auth lock deadlock with `getSession`); cache access tokens from auth events; add API/auth timeouts and clearer 503 errors; Vercel API no longer blocks every request until DB bootstrap finishes.
 - **Vercel build** — export `getCachedSupabaseAccessToken` used by `AuthContext` (fixes Rollup PWA build error).
+
+## [2026-09-28] — Vercel hosting guide
+
+### Changed
+- **docs/VERCEL.md** — step-by-step deploy for `AlphaZee01/CEYC-CMS`, env table, post-deploy Supabase URLs, and troubleshooting; README quick Vercel steps.
 
 ## [2026-09-28] — Dedicated GitHub repo setup
 

@@ -173,6 +173,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const token = localStorage.getItem("celcm_token");
         if (token && mounted) void refresh();
       } finally {
+        authLog("Auth bootstrap finished", "loading=false");
         setLoading(false);
       }
       return undefined;
@@ -190,7 +191,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signInFlowRef.current = true;
     beginPasswordSignIn();
     try {
-      await loadAuthMode();
+      const mode = await loadAuthMode();
+      authLog("login()", `mode=${mode} useSupabase=${useSupabaseForAuth()}`);
 
       if (useSupabaseForAuth()) {
         if (!supabase) {
@@ -219,10 +221,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setPages(me.pages as PageId[]);
       setDepartmentAbilities(me.departmentAbilities || []);
       applyBranding(setBranding, me.branding);
-      authLog("Sign-in complete");
+      authLog("Sign-in complete", "jwt");
+    } catch (err) {
+      authLogError("login() failed", err);
+      throw err;
     } finally {
       signInFlowRef.current = false;
       endPasswordSignIn();
+      authLog("login() finally", "signInFlow cleared");
     }
   };
 

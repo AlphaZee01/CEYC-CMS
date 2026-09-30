@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { authLog, authLogError } from "@/lib/auth-log";
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -51,10 +52,12 @@ if (supabase) {
 
 export function beginPasswordSignIn() {
   passwordSignInInProgress = true;
+  authLog("Supabase password sign-in", "blocking background getSession");
 }
 
 export function endPasswordSignIn() {
   passwordSignInInProgress = false;
+  authLog("Supabase password sign-in", "ended");
 }
 
 export function isPasswordSignInInProgress() {
@@ -132,12 +135,20 @@ export async function getSupabaseAccessToken(): Promise<string | null> {
 
 export async function signInWithEmail(email: string, password: string) {
   if (!supabase) throw new Error("Supabase is not configured");
+  authLog("signInWithPassword", email);
   const { data, error } = await withAuthTimeout("Sign in", () =>
     supabase!.auth.signInWithPassword({ email, password })
   );
-  if (error) throw new Error(error.message);
-  if (!data.session?.access_token) throw new Error("Sign-in succeeded but no session was returned");
+  if (error) {
+    authLogError("signInWithPassword", error);
+    throw new Error(error.message);
+  }
+  if (!data.session?.access_token) {
+    authLogError("signInWithPassword", "no access_token on session");
+    throw new Error("Sign-in succeeded but no session was returned");
+  }
   cachedAccessToken = data.session.access_token;
+  authLog("signInWithPassword ok", `token length ${data.session.access_token.length}`);
   return data.session;
 }
 
