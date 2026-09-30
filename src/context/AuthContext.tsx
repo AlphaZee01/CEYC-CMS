@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
-import { api, authApi, setToken } from "@/lib/api";
+import { api, authApi, fetchBootstrap, setToken } from "@/lib/api";
 import { loadAuthMode, useSupabaseForAuth } from "@/lib/auth-mode";
 import {
   supabase,
@@ -79,12 +79,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   /** True while login() is loading the session — skip SIGNED_IN listener refresh (avoids auth lock deadlock). */
   const signInFlowRef = useRef(false);
+  /** Skip duplicate SIGNED_IN refresh after persisted session already loaded via /api/auth/me. */
+  const sessionHydratedRef = useRef(false);
 
   const clearSession = useCallback(async () => {
     setUser(null);
     setPages([]);
     setDepartmentAbilities([]);
     setToken(null);
+    sessionHydratedRef.current = false;
     if (useSupabaseForAuth()) await clearStaleSupabaseSession();
   }, []);
 
@@ -96,6 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const data = await authLogTimed("GET /api/auth/me", () => authApi.me());
         applySession(setUser, setPages, setDepartmentAbilities, setBranding, data);
+        sessionHydratedRef.current = true;
         authLog("Session loaded", (data.user as AuthUser)?.member?.email);
       } catch (err) {
         const message = err instanceof Error ? err.message : "";
@@ -153,6 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (!session) return;
 
             if (event === "SIGNED_IN" && signInFlowRef.current) return;
+            if (event === "SIGNED_IN" && sessionHydratedRef.current) return;
 
             if (event === "TOKEN_REFRESHED" || event === "SIGNED_IN") {
               scheduleSessionRefresh();
@@ -216,6 +221,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           ])
         );
         applySession(setUser, setPages, setDepartmentAbilities, setBranding, data);
+        sessionHydratedRef.current = true;
         authLog("Sign-in complete");
         return;
       }
@@ -229,6 +235,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setPages(me.pages as PageId[]);
       setDepartmentAbilities(me.departmentAbilities || []);
       applyBranding(setBranding, me.branding);
+      sessionHydratedRef.current = true;
       authLog("Sign-in complete", "jwt");
     } catch (err) {
       authLogError("login() failed", err);
@@ -285,7 +292,7 @@ export function useBootstrap(enabled: boolean) {
     if (!enabled) return;
     setLoading(true);
     try {
-      const d = await authLogTimed("GET /api/bootstrap", () => api<typeof data>("/bootstrap"));
+      const d = await authLogTimed("GET /api/bootstrap", () => fetchBootstrap<typeof data>());
       setData(d);
       authLog("Bootstrap loaded", `${(d?.members as unknown[])?.length ?? 0} members`);
     } finally {

@@ -112,7 +112,7 @@ Then complete **Step 3** (`APP_URL` + Supabase redirect URLs + redeploy).
 
 ## Notes
 
-- **Cold start** — `/api/public/config`, health, and **`GET /api/auth/me`** use lightweight handlers so login is not blocked by importing the full Express app.
+- **Cold start** — `/api/public/config`, health, **`GET /api/auth/me`**, and **`GET /api/bootstrap`** use lightweight handlers so login and first app load are not blocked by importing the full Express app.
 - **Background jobs** (overdue report emails) do not run on Vercel. Use [Vercel Cron](https://vercel.com/docs/cron-jobs) later if needed.
 - **Function timeout:** 60s on the API (`vercel.json`).
 - **Local dev** unchanged: `npm run dev` (Vite :8080 + API :3001).

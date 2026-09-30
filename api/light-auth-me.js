@@ -2,21 +2,10 @@
  * Fast GET /api/auth/me on Vercel — Postgres + auth only, no full Express app import.
  */
 
-import { initDatabase, getDb } from "../server/store.js";
+import { getDb } from "../server/store.js";
 import { resolveUserFromAuthHeader, resolvePagesForUser } from "../server/auth.js";
 import { brandingFromSettings } from "../server/storage.js";
-
-let dbReadyPromise = null;
-
-function ensureDatabase() {
-  if (!dbReadyPromise) {
-    dbReadyPromise = initDatabase().catch((err) => {
-      dbReadyPromise = null;
-      throw err;
-    });
-  }
-  return dbReadyPromise;
-}
+import { ensureDatabase } from "./vercel-db.js";
 
 export function matchLightAuthMePath(req) {
   const method = (req.method || "GET").toUpperCase();

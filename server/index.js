@@ -55,6 +55,7 @@ import { canViewBirthdays, getBirthdaysForMonth } from "./birthdays.js";
 import { syncAuthUsers, createSupabaseAuthUser, updateSupabaseAuthPassword } from "./auth-sync.js";
 import { useSupabaseAuth } from "./supabase.js";
 import { persistUploadedFile, brandingFromSettings, normalizeLogoUrlForStorage } from "./storage.js";
+import { buildBootstrapPayload, departmentToJson } from "./bootstrap-payload.js";
 import { buildWebAppManifest } from "./web-app-manifest.js";
 import { isGoogleDriveUrl, normalizeGoogleDriveUrl } from "./media-url.js";
 
@@ -208,19 +209,6 @@ async function getMemberDepartmentsMap(db, memberIds) {
   return map;
 }
 
-/** One query for bootstrap: member → departments and department → members. */
-function mapsFromMemberDepartmentRows(rows) {
-  const byMember = new Map();
-  const byDepartment = new Map();
-  for (const r of rows) {
-    if (!byMember.has(r.member_id)) byMember.set(r.member_id, []);
-    byMember.get(r.member_id).push(r.department_id);
-    if (!byDepartment.has(r.department_id)) byDepartment.set(r.department_id, []);
-    byDepartment.get(r.department_id).push(r.member_id);
-  }
-  return { byMember, byDepartment };
-}
-
 async function loadMember(db, id) {
   const row = await db.prepare("SELECT * FROM members WHERE id = ?").get(id);
   return memberToJson(row, await getMemberDepartments(db, id));
@@ -285,69 +273,8 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
 // ─── Bootstrap (full app state) ──────────────────────────────────────────────
 
 app.get("/api/bootstrap", authMiddleware, async (req, res) => {
-  const db = getDb();
-  const scope = scopeMemberFilter({
-    id: req.user.member.id,
-    role: req.user.member.role,
-    fellowship_id: req.user.member.fellowshipId,
-    cell_id: req.user.member.cellId,
-  });
-
-  const [memberRows, fellowshipRows, cellRows, deptRows, settings, memberDeptRows] = await Promise.all([
-    db.prepare(`SELECT * FROM members WHERE active = 1 AND ${scope.sql} ORDER BY name`).all(...scope.params),
-    db.prepare("SELECT * FROM fellowships ORDER BY name").all(),
-    db.prepare("SELECT * FROM cells ORDER BY name").all(),
-    db.prepare("SELECT * FROM departments ORDER BY name").all(),
-    db.prepare("SELECT * FROM church_settings WHERE id = 1").get(),
-    db.prepare("SELECT member_id, department_id FROM member_departments").all(),
-  ]);
-
-  const { byMember: deptMap, byDepartment: departmentMembersMap } = mapsFromMemberDepartmentRows(memberDeptRows);
-  const members = memberRows.map((m) => memberToJson(m, deptMap.get(m.id) || []));
-  const fellowships = fellowshipRows.map((f) => ({
-    id: f.id,
-    name: f.name,
-    leaderId: f.leader_id,
-  }));
-  const cells = cellRows.map((c) => ({
-    id: c.id,
-    name: c.name,
-    fellowshipId: c.fellowship_id,
-    leaderId: c.leader_id,
-    subLeaderId: c.sub_leader_id,
-  }));
-  const departments = deptRows.map((d) => departmentToJson(d, departmentMembersMap.get(d.id) || []));
-  const branding = brandingFromSettings(settings, req);
-
-  res.json({
-    members,
-    fellowships,
-    cells,
-    departments,
-    settings: settings
-      ? {
-          name: branding.name,
-          tagline: branding.tagline,
-          address: settings.address,
-          phone: settings.phone,
-          email: settings.email,
-          logoUrl: branding.logoUrl,
-        }
-      : {},
-    pages: resolvePagesForUser(req.user),
-    departmentAbilities: req.user.departmentAbilities || [],
-  });
+  res.json(await buildBootstrapPayload(getDb(), req.user, req));
 });
-
-function departmentToJson(d, memberIds) {
-  return {
-    id: d.id,
-    name: d.name,
-    headId: d.head_id,
-    memberIds,
-    abilities: parseDepartmentAbilities(d.abilities),
-  };
-}
 
 // ─── Members ───────────────────────────────────────────────────────────────────
 

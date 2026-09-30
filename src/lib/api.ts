@@ -4,13 +4,31 @@ import { authLog, authLogHttp, authDebugEnabled } from "@/lib/auth-log";
 import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 
 const API_BASE = "/api";
-const AUTH_FETCH_TIMEOUT_MS = 55_000;
+const SLOW_API_TIMEOUT_MS = 55_000;
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 const PUBLIC_CONFIG_TIMEOUT_MS = 8_000;
 
 function fetchTimeoutForPath(path: string) {
   if (path.includes("public/config")) return PUBLIC_CONFIG_TIMEOUT_MS;
-  return path.startsWith("/auth/") ? AUTH_FETCH_TIMEOUT_MS : DEFAULT_FETCH_TIMEOUT_MS;
+  if (path.startsWith("/auth/") || path.includes("bootstrap")) return SLOW_API_TIMEOUT_MS;
+  return DEFAULT_FETCH_TIMEOUT_MS;
+}
+
+/** Bootstrap can hit Vercel cold DB; retry 503 / timeout a few times. */
+export async function fetchBootstrap<T>(): Promise<T> {
+  const backoffMs = [0, 1500, 3000];
+  let lastError: unknown;
+  for (const wait of backoffMs) {
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    try {
+      return await api<T>("/bootstrap");
+    } catch (err) {
+      lastError = err;
+      const message = err instanceof Error ? err.message : "";
+      if (!/503|still starting|timed out|unavailable/i.test(message)) throw err;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Could not load app data");
 }
 
 function getLegacyToken() {

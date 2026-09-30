@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-09-30] — Bootstrap timeout on Vercel
+
+### Fixed
+- **Vercel API** — `GET /api/bootstrap` uses `api/light-bootstrap.js` (shared `server/bootstrap-payload.js`) without loading the full Express app.
+- **Client** — 55s fetch timeout for `/bootstrap`; retries on 503/timeout; skip duplicate `SIGNED_IN` → `/api/auth/me` when session already hydrated.
+
 ## [2026-09-30] — Faster bootstrap and dashboard load
 
 ### Changed
