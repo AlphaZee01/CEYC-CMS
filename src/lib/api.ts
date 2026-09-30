@@ -42,7 +42,7 @@ export function setToken(token: string | null) {
 
 function isLoginRoute() {
   const path = window.location.pathname;
-  return path === "/" || path === "/reset-password";
+  return path === "/" || path === "/signup" || path === "/reset-password";
 }
 
 export async function publicApi<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -163,6 +163,11 @@ export const authApi = {
     publicApi<{ token: string; user: unknown }>("/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
+    }),
+  signup: (body: { name: string; email: string; password: string; phone?: string }) =>
+    publicApi<{ ok?: boolean; email?: string; token?: string; user?: unknown }>("/auth/signup", {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
   me: () =>
     api<{

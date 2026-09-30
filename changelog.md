@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-09-30] — Public signup page
+
+### Added
+- **`/signup`** — self-registration (name, email, optional phone, password) with link from the login page.
+- **`POST /api/auth/signup`** — creates a **Church Member** account and login (Supabase or JWT). Set `ALLOW_PUBLIC_SIGNUP=false` to disable.
+
 ## [2026-09-30] — Chat rebuild (Supabase Realtime postgres_changes)
 
 ### Changed

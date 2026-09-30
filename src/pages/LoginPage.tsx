@@ -1,5 +1,5 @@
 import { useState, useEffect, type FormEvent } from "react";
-import { Navigate } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { Loader2, Mail, Lock, ArrowRight } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { api } from "@/lib/api";
@@ -159,6 +159,9 @@ export default function LoginPage() {
                 >
                   Forgot password?
                 </button>
+                <Link to="/signup" className="font-medium text-primary transition hover:text-primary/80">
+                  Sign up
+                </Link>
               </div>
             </form>
           )}

@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { AuthProvider, useAuth, useBootstrap } from "@/context/AuthContext";
 import LoginPage from "@/pages/LoginPage";
+import SignupPage from "@/pages/SignupPage";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import { AppLayout } from "@/components/church/AppLayout";
 import { DashboardSkeleton, AppShellSkeleton } from "@/components/church/skeletons";
@@ -173,6 +174,7 @@ export default function App() {
         <Toaster richColors position="top-center" closeButton />
         <Routes>
           <Route path="/" element={<LoginPage />} />
+          <Route path="/signup" element={<SignupPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/app/*" element={<ProtectedApp />} />
           <Route path="*" element={<Navigate to="/" replace />} />

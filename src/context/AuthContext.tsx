@@ -34,6 +34,7 @@ interface AuthState {
   branding: ChurchBranding;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
+  signup: (name: string, email: string, password: string, phone?: string) => Promise<void>;
   logout: () => void;
   refresh: () => Promise<void>;
   syncBranding: (branding: ChurchBranding) => void;
@@ -253,6 +254,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const signup = async (name: string, email: string, password: string, phone?: string) => {
+    const emailNorm = email.trim().toLowerCase();
+    await authApi.signup({
+      name: name.trim(),
+      email: emailNorm,
+      password,
+      phone,
+    });
+    await login(emailNorm, password);
+  };
+
   const syncBranding = useCallback((next: ChurchBranding) => {
     setBranding(next);
     cacheBranding(next);
@@ -271,7 +283,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, pages, departmentAbilities, branding, loading, login, logout, refresh, syncBranding }}
+      value={{ user, pages, departmentAbilities, branding, loading, login, signup, logout, refresh, syncBranding }}
     >
       {children}
     </AuthContext.Provider>
