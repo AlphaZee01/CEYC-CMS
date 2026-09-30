@@ -1,5 +1,12 @@
 # Changelog
 
+## [2026-09-30] — Signup button / form UX
+
+### Fixed
+- **Login** — “Create account” is a router `Link` outside the sign-in form (avoids nested-button / submit quirks).
+- **Signup** — `noValidate` plus visible validation for name, email, and password; toast + inline errors on failure; redirect to `/app` after success.
+- **Vercel** — light `/api/public/config` includes `allowSignup` (matches full API).
+
 ## [2026-09-30] — Vercel deploy troubleshooting
 
 ### Added

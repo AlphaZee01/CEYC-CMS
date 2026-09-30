@@ -1,13 +1,19 @@
 import { useState, useEffect, type FormEvent } from "react";
-import { Link, Navigate } from "react-router-dom";
-import { Loader2, ArrowRight, UserPlus } from "lucide-react";
+import { Link, Navigate, useNavigate } from "react-router-dom";
+import { toast } from "sonner";
+import { Loader2, UserPlus } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { fetchPublicBranding, getCachedBranding } from "@/lib/branding";
 import { Btn, Input } from "@/components/church/ui";
 import { ChurchBrand } from "@/components/church/ChurchBrand";
 import { publicApi } from "@/lib/api";
+import { authLog, authLogError } from "@/lib/auth-log";
+import { getAuthMode } from "@/lib/auth-mode";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function SignupPage() {
+  const navigate = useNavigate();
   const { signup, user, loading: authLoading } = useAuth();
   const [branding, setBranding] = useState(getCachedBranding);
   const [name, setName] = useState("");
@@ -21,10 +27,18 @@ export default function SignupPage() {
   const [configLoading, setConfigLoading] = useState(true);
 
   useEffect(() => {
+    authLog("SignupPage mount", `mode=${getAuthMode()}`);
     fetchPublicBranding().then(setBranding).catch(() => {});
     publicApi<{ allowSignup?: boolean }>("/public/config")
-      .then((c) => setAllowSignup(c.allowSignup !== false))
-      .catch(() => setAllowSignup(true))
+      .then((c) => {
+        const allowed = c.allowSignup !== false;
+        setAllowSignup(allowed);
+        authLog("SignupPage config", `allowSignup=${allowed}`);
+      })
+      .catch((err) => {
+        authLogError("SignupPage config", err);
+        setAllowSignup(true);
+      })
       .finally(() => setConfigLoading(false));
   }, []);
 
@@ -33,21 +47,47 @@ export default function SignupPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
+    const fullName = name.trim();
+    const emailNorm = email.trim().toLowerCase();
+    authLog("SignupPage submit", `authLoading=${authLoading} mode=${getAuthMode()} email=${emailNorm}`);
+
+    if (!fullName) {
+      setError("Please enter your full name");
+      return;
+    }
+    if (!emailNorm) {
+      setError("Please enter your email address");
+      return;
+    }
+    if (!EMAIL_RE.test(emailNorm)) {
+      setError("Enter a valid email address");
+      return;
+    }
     if (password !== confirm) {
+      authLog("SignupPage submit", "validation failed: passwords do not match");
       setError("Passwords do not match");
       return;
     }
     if (password.length < 8) {
+      authLog("SignupPage submit", "validation failed: password too short");
       setError("Password must be at least 8 characters");
       return;
     }
+
     setLoading(true);
     try {
-      await signup(name, email, password, phone.trim() || undefined);
+      await signup(fullName, emailNorm, password, phone.trim() || undefined);
+      authLog("SignupPage submit", "success → redirect");
+      toast.success("Account created — welcome!");
+      navigate("/app", { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Signup failed");
+      authLogError("SignupPage submit", err);
+      const message = err instanceof Error ? err.message : "Signup failed";
+      setError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
+      authLog("SignupPage submit", "button loading=false");
     }
   };
 
@@ -101,7 +141,7 @@ export default function SignupPage() {
               </Link>
             </div>
           ) : (
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-4" noValidate>
               <Input label="Full name" value={name} onChange={setName} placeholder="Your name" />
               <Input label="Email address" value={email} onChange={setEmail} type="email" placeholder="you@church.org" />
               <Input label="Phone (optional)" value={phone} onChange={setPhone} type="tel" placeholder="+233 …" />

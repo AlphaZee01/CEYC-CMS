@@ -25,7 +25,12 @@ export function matchLightPublicPath(url) {
 export function handleLightPublic(kind, req, res) {
   if (kind === "config") {
     res.setHeader("Content-Type", "application/json");
-    res.status(200).end(JSON.stringify({ authMode: useSupabaseAuth() ? "supabase" : "jwt" }));
+    res.status(200).end(
+      JSON.stringify({
+        authMode: useSupabaseAuth() ? "supabase" : "jwt",
+        allowSignup: process.env.ALLOW_PUBLIC_SIGNUP !== "false",
+      })
+    );
     return true;
   }
   if (kind === "branding") {

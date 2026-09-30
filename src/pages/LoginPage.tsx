@@ -1,5 +1,5 @@
 import { useState, useEffect, type FormEvent } from "react";
-import { Link, Navigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { Loader2, Mail, Lock, ArrowRight } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { api } from "@/lib/api";
@@ -140,30 +140,35 @@ export default function LoginPage() {
               </button>
             </form>
           ) : (
-            <form onSubmit={handleSubmit} className="space-y-5">
-              <Input label="Email address" value={email} onChange={setEmail} type="email" placeholder="pastor@celcm.org" />
-              <Input label="Password" value={password} onChange={setPassword} type="password" placeholder="••••••••" />
-              {error && <p className="rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
-              <Btn type="submit" className="w-full gap-2" disabled={loading}>
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-                {loading ? "Signing in..." : "Continue"}
-              </Btn>
-              {authLoading && !loading && (
-                <p className="text-center text-xs text-muted-foreground">Checking connection…</p>
-              )}
-              <div className="flex items-center justify-between text-sm">
-                <button
-                  type="button"
-                  className="font-medium text-primary transition hover:text-primary/80"
-                  onClick={() => setForgotMode(true)}
-                >
-                  Forgot password?
-                </button>
-                <Link to="/signup" className="font-medium text-primary transition hover:text-primary/80">
-                  Sign up
-                </Link>
-              </div>
-            </form>
+            <>
+              <form onSubmit={handleSubmit} className="space-y-5" noValidate>
+                <Input label="Email address" value={email} onChange={setEmail} type="email" placeholder="pastor@celcm.org" />
+                <Input label="Password" value={password} onChange={setPassword} type="password" placeholder="••••••••" />
+                {error && <p className="rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+                <Btn type="submit" className="w-full gap-2" disabled={loading}>
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                  {loading ? "Signing in..." : "Continue"}
+                </Btn>
+                {authLoading && !loading && (
+                  <p className="text-center text-xs text-muted-foreground">Checking connection…</p>
+                )}
+                <div className="text-center text-sm">
+                  <button
+                    type="button"
+                    className="font-medium text-primary transition hover:text-primary/80"
+                    onClick={() => setForgotMode(true)}
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+              </form>
+              <Link
+                to="/signup"
+                className="mt-3 flex min-h-[44px] w-full items-center justify-center rounded-xl border border-border bg-background px-4 py-2.5 text-sm font-semibold text-foreground shadow-sm transition hover:bg-muted/80 active:scale-[0.98]"
+              >
+                Create account
+              </Link>
+            </>
           )}
 
           {!forgotMode && (
