@@ -1,5 +1,16 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { ArrowLeft, Check, CheckCheck, Clock, LayoutGrid, Megaphone, Search, Send } from "lucide-react";
+import {
+  ArrowLeft,
+  Check,
+  CheckCheck,
+  Clock,
+  LayoutGrid,
+  Megaphone,
+  MessageCircle,
+  PenSquare,
+  Search,
+  Send,
+} from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import {
@@ -17,63 +28,88 @@ import {
 import type { ChatMessage, Conversation } from "@/lib/chat-types";
 import { cn, AvatarCircle } from "@/components/church/ui";
 import { ChatListSkeleton, ChatThreadSkeleton } from "@/components/church/skeletons";
-import { ICON_TONES, toneFromString } from "@/lib/icon-colors";
 import { useOpenMenu } from "@/components/church/AppLayout";
 import type { Member } from "@/types/church";
+
+/** WhatsApp-like palette (light). */
+const WA = {
+  header: "#008069",
+  headerDark: "#075e54",
+  panel: "#ffffff",
+  listHover: "#f5f6f6",
+  chatBg: "#efeae2",
+  composer: "#f0f2f5",
+  sentBubble: "#d9fdd3",
+  meta: "#667781",
+  tickRead: "#53bdeb",
+  tickSent: "#8696a0",
+  accent: "#25d366",
+};
+
+const CHAT_WALLPAPER =
+  "url(\"data:image/svg+xml,%3Csvg width='80' height='80' viewBox='0 0 80 80' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23d4cdc4' fill-opacity='0.35'%3E%3Cpath d='M0 0h40v40H0V0zm40 40h40v40H40V40z'/%3E%3C/g%3E%3C/svg%3E\")";
 
 interface ChatAppProps {
   members: Member[];
   currentUser: Member;
 }
 
-function formatTime(iso: string) {
+function formatBubbleTime(iso: string) {
+  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatListTime(iso: string) {
   const d = new Date(iso);
   const now = new Date();
-  const sameDay = d.toDateString() === now.toDateString();
-  if (sameDay) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === now.toDateString()) return formatBubbleTime(iso);
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-function MessageStatusIndicator({ message, isMine }: { message: ChatMessage; isMine: boolean }) {
-  if (!isMine) {
-    if (!message.read) {
-      return <span className="text-[10px] font-medium text-highlight">New</span>;
+function dateSeparatorLabel(iso: string) {
+  const d = new Date(iso);
+  const now = new Date();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === now.toDateString()) return "Today";
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return d.toLocaleDateString([], {
+    day: "numeric",
+    month: "long",
+    year: d.getFullYear() !== now.getFullYear() ? "numeric" : undefined,
+  });
+}
+
+type ThreadRow = { kind: "date"; label: string; key: string } | { kind: "msg"; message: ChatMessage };
+
+function buildThreadRows(messages: ChatMessage[]): ThreadRow[] {
+  const rows: ThreadRow[] = [];
+  let lastDate = "";
+  for (const m of messages) {
+    const label = dateSeparatorLabel(m.sentAt);
+    if (label !== lastDate) {
+      rows.push({ kind: "date", label, key: `date-${label}-${m.sentAt}` });
+      lastDate = label;
     }
-    return null;
+    rows.push({ kind: "msg", message: m });
   }
+  return rows;
+}
+
+function MessageStatusIndicator({ message, isMine }: { message: ChatMessage; isMine: boolean }) {
+  if (!isMine) return null;
   if (message.failed) {
-    return <span className="text-[10px] font-medium text-red-300">Failed</span>;
+    return <span className="text-[11px] font-medium text-red-600">Failed</span>;
   }
   if (message.pending) {
-    return (
-      <span className="inline-flex items-center gap-0.5 text-[10px] text-white/70" title="Sending">
-        <Clock className="h-3 w-3" />
-        Sending
-      </span>
-    );
-  }
-  if (message.broadcast) {
-    return (
-      <span className="inline-flex items-center gap-0.5 text-[10px] text-white/70" title="Sent">
-        <Check className="h-3 w-3" />
-        Sent
-      </span>
-    );
+    return <Clock className="h-[14px] w-[14px] text-[#8696a0]" aria-label="Sending" />;
   }
   if (message.recipientRead) {
-    return (
-      <span className="inline-flex items-center gap-0.5 text-[10px] text-sky-200" title="Read">
-        <CheckCheck className="h-3.5 w-3.5" />
-        Read
-      </span>
-    );
+    return <CheckCheck className="h-[14px] w-[14px] text-[#53bdeb]" aria-label="Read" />;
   }
-  return (
-    <span className="inline-flex items-center gap-0.5 text-[10px] text-white/70" title="Delivered">
-      <Check className="h-3 w-3" />
-      Sent
-    </span>
-  );
+  return <Check className="h-[14px] w-[14px] text-[#8696a0]" aria-label="Sent" />;
 }
 
 export function ChatApp({ members, currentUser }: ChatAppProps) {
@@ -216,6 +252,8 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
     [members, currentUser.id, search]
   );
 
+  const threadRows = useMemo(() => buildThreadRows(messages), [messages]);
+
   const send = async () => {
     const text = draft.trim();
     if (!text || sending || !activeId) return;
@@ -291,61 +329,94 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
   };
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden bg-background lg:-mx-6 lg:rounded-xl lg:border lg:border-border">
-      {/* Conversation list */}
+    <div
+      className="flex h-full min-h-0 overflow-hidden lg:mx-0 lg:rounded-lg lg:border lg:border-[#d1d7db]"
+      style={{ backgroundColor: WA.composer }}
+    >
+      {/* Chats list */}
       <aside
         className={cn(
-          "flex w-full shrink-0 flex-col border-r bg-card lg:w-80 xl:w-96",
+          "flex w-full shrink-0 flex-col border-r border-[#e9edef] bg-white lg:w-[30%] lg:min-w-[320px] lg:max-w-[420px]",
           showThread && "hidden lg:flex"
         )}
       >
-        <div className="border-b border-white/10 bg-gradient-to-r from-[hsl(var(--sidebar-accent))] to-[hsl(var(--sidebar-primary))] px-4 pb-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] text-white lg:pt-4">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <h2 className="text-xl font-semibold tracking-tight">Messages</h2>
-              <p className="text-xs text-white/70">Chat with your church family</p>
-            </div>
-            <div className="flex items-center gap-1.5">
-              {openMenu && (
-                <button
-                  type="button"
-                  className="touch-target flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 transition hover:bg-white/20 lg:hidden"
-                  onClick={openMenu}
-                  aria-label="Open full menu"
-                >
-                  <LayoutGrid className="h-5 w-5" />
-                </button>
-              )}
-              <AvatarCircle name={currentUser.name} size="sm" variant="solid" />
-            </div>
+        <div
+          className="flex shrink-0 items-center justify-between gap-2 px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.65rem)] text-white lg:pt-3"
+          style={{ backgroundColor: WA.header }}
+        >
+          <div className="flex min-w-0 items-center gap-3">
+            {openMenu && (
+              <button
+                type="button"
+                className="touch-target flex h-10 w-10 items-center justify-center rounded-full hover:bg-white/10 lg:hidden"
+                onClick={openMenu}
+                aria-label="Open menu"
+              >
+                <LayoutGrid className="h-5 w-5" />
+              </button>
+            )}
+            <AvatarCircle name={currentUser.name} size="sm" variant="solid" />
+            <h2 className="text-lg font-medium tracking-tight">Chats</h2>
           </div>
-          <div className="relative mt-4">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <button
+            type="button"
+            onClick={() => setShowNewChat((v) => !v)}
+            className="touch-target flex h-10 w-10 items-center justify-center rounded-full hover:bg-white/10"
+            aria-label={showNewChat ? "Close new chat" : "New chat"}
+          >
+            <PenSquare className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="shrink-0 border-b border-[#e9edef] bg-white px-3 py-2">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#8696a0]" />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search people..."
-              className="w-full min-h-[42px] rounded-full border-0 bg-white py-2.5 pl-10 pr-4 text-sm text-foreground shadow-sm outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-accent"
+              placeholder="Search contacts"
+              className="w-full min-h-[36px] rounded-lg bg-[#f0f2f5] py-2 pl-9 pr-3 text-sm text-[#111b21] outline-none placeholder:text-[#8696a0] focus:ring-1 focus:ring-[#008069]/40"
             />
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto pb-2 lg:pb-0">
+        <div className="flex-1 overflow-y-auto">
+          {showNewChat && (
+            <ul className="max-h-56 overflow-y-auto border-b border-[#e9edef] bg-[#f0f2f5]">
+              {contactableMembers.length === 0 ? (
+                <li className="px-4 py-3 text-sm text-[#667781]">No contacts match your search.</li>
+              ) : (
+                contactableMembers.map((m) => (
+                  <li key={m.id}>
+                    <button
+                      type="button"
+                      onClick={() => startNewChat(m.id)}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-white"
+                    >
+                      <AvatarCircle name={m.name} size="md" />
+                      <span className="truncate text-[15px] text-[#111b21]">{m.name}</span>
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          )}
+
           {canBroadcast && (
             <button
               type="button"
               onClick={() => openChat("__broadcast__")}
               className={cn(
-                "flex w-full items-center gap-3 border-b px-4 py-3 text-left transition hover:bg-muted/50",
-                activeId === "__broadcast__" && "bg-orange-500/10"
+                "flex w-full items-center gap-3 px-3 py-3 text-left transition hover:bg-[#f5f6f6]",
+                activeId === "__broadcast__" && "bg-[#f0f2f5]"
               )}
             >
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-orange-500/15 text-orange-600">
+              <div className="flex h-[49px] w-[49px] shrink-0 items-center justify-center rounded-full bg-[#25d366]/15 text-[#008069]">
                 <Megaphone className="h-5 w-5" />
               </div>
-              <div className="min-w-0 flex-1">
-                <p className="font-medium">Church Broadcast</p>
-                <p className="truncate text-xs text-muted-foreground">Message all members</p>
+              <div className="min-w-0 flex-1 border-b border-[#e9edef] pb-3">
+                <p className="truncate text-[17px] text-[#111b21]">Church Broadcast</p>
+                <p className="truncate text-sm text-[#667781]">Announcements to all members</p>
               </div>
             </button>
           )}
@@ -353,162 +424,167 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
           {loadingList && conversations.length === 0 ? (
             <ChatListSkeleton />
           ) : conversations.length === 0 ? (
-            <p className="p-4 text-sm text-muted-foreground">No conversations yet. Start a chat below.</p>
+            <p className="px-4 py-8 text-center text-sm text-[#667781]">
+              No chats yet. Tap <span className="font-medium text-[#008069]">New chat</span> to start.
+            </p>
           ) : (
-            conversations.map((c) => {
-              const partnerTone = toneFromString(c.partnerName);
-              const partnerStyle = ICON_TONES[partnerTone];
-              return (
+            conversations.map((c) => (
               <button
                 key={c.id}
                 type="button"
                 onClick={() => openChat(c.id)}
                 className={cn(
-                  "flex w-full items-center gap-3 border-b px-4 py-3 text-left transition hover:bg-muted/50",
-                  activeId === c.id && partnerStyle.soft,
+                  "flex w-full items-center gap-3 px-3 py-3 text-left transition hover:bg-[#f5f6f6]",
+                  activeId === c.id && "bg-[#f0f2f5]"
                 )}
               >
                 <AvatarCircle name={c.partnerName} size="md" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="truncate font-medium">{c.partnerName}</p>
-                    <span className="shrink-0 text-[10px] text-muted-foreground">{formatTime(c.lastAt)}</span>
-                  </div>
-                  <p className="truncate text-xs text-muted-foreground">{c.lastMessage || "No messages yet"}</p>
-                </div>
-                {c.unreadCount > 0 && (
-                  <span className={cn("flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-[10px] font-bold text-white", partnerStyle.solid)}>
-                    {c.unreadCount > 9 ? "9+" : c.unreadCount}
-                  </span>
-                )}
-              </button>
-            );
-            })
-          )}
-
-          <div className="border-t p-3">
-            <button
-              type="button"
-              onClick={() => setShowNewChat((v) => !v)}
-              className="w-full rounded-lg bg-primary/10 py-2 text-sm font-medium text-primary"
-            >
-              {showNewChat ? "Hide contacts" : "New chat"}
-            </button>
-            {showNewChat && (
-              <ul className="mt-2 max-h-48 overflow-y-auto rounded-lg border">
-                {contactableMembers.map((m) => (
-                  <li key={m.id}>
-                    <button
-                      type="button"
-                      onClick={() => startNewChat(m.id)}
-                      className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm hover:bg-muted/50"
+                <div className="min-w-0 flex-1 border-b border-[#e9edef] pb-3">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <p className="truncate text-[17px] text-[#111b21]">{c.partnerName}</p>
+                    <span
+                      className={cn(
+                        "shrink-0 text-xs",
+                        c.unreadCount > 0 ? "font-medium text-[#25d366]" : "text-[#667781]"
+                      )}
                     >
-                      <AvatarCircle name={m.name} size="sm" />
-                      <span className="truncate">{m.name}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+                      {formatListTime(c.lastAt)}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 flex items-center justify-between gap-2">
+                    <p className="truncate text-sm text-[#667781]">{c.lastMessage || "No messages yet"}</p>
+                    {c.unreadCount > 0 && (
+                      <span
+                        className="flex h-[22px] min-w-[22px] shrink-0 items-center justify-center rounded-full px-1.5 text-xs font-medium text-white"
+                        style={{ backgroundColor: WA.accent }}
+                      >
+                        {c.unreadCount > 9 ? "9+" : c.unreadCount}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </button>
+            ))
+          )}
         </div>
       </aside>
 
       {/* Thread */}
-      <main className={cn("flex min-w-0 flex-1 flex-col bg-background", !showThread && "hidden lg:flex")}>
+      <main
+        className={cn(
+          "flex min-w-0 flex-1 flex-col",
+          !showThread && "hidden lg:flex",
+          !activeId && "bg-[#f8f9fa]"
+        )}
+      >
         {!activeId ? (
-          <div className="flex flex-1 flex-col items-center justify-center p-6 text-center text-muted-foreground lg:flex">
-            <p className="text-lg font-medium text-primary">Select a conversation</p>
-            <p className="mt-1 text-sm">Tap a person below, or use <strong className="font-medium text-foreground">New chat</strong> to open a thread — then type at the bottom.</p>
+          <div className="hidden flex-1 flex-col items-center justify-center border-b border-[#d1d7db] bg-[#f8f9fa] p-8 text-center lg:flex">
+            <div
+              className="mb-6 flex h-24 w-24 items-center justify-center rounded-full"
+              style={{ backgroundColor: `${WA.header}18` }}
+            >
+              <MessageCircle className="h-12 w-12 text-[#008069]" strokeWidth={1.25} />
+            </div>
+            <p className="text-[32px] font-light text-[#41525d]">Church Chat</p>
+            <p className="mt-3 max-w-md text-sm leading-relaxed text-[#667781]">
+              Send and receive messages with your church family. Select a chat on the left to open a conversation.
+            </p>
           </div>
         ) : (
           <>
-            <header className="flex items-center gap-3 border-b border-primary/10 bg-gradient-to-r from-[hsl(var(--sidebar-accent))] to-[hsl(var(--sidebar-primary))] px-3 py-3 text-white shadow-md pt-[calc(env(safe-area-inset-top)+0.5rem)] lg:pt-3">
+            <header
+              className="flex shrink-0 items-center gap-2 px-2 py-2 text-white shadow-sm pt-[calc(env(safe-area-inset-top)+0.35rem)] lg:pt-2"
+              style={{ backgroundColor: WA.header }}
+            >
               <button
                 type="button"
-                className="touch-target flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 transition hover:bg-white/20 lg:hidden"
+                className="touch-target flex h-10 w-10 items-center justify-center rounded-full hover:bg-white/10 lg:hidden"
                 onClick={() => setActiveId(null)}
                 aria-label="Back to chats"
               >
                 <ArrowLeft className="h-5 w-5" />
               </button>
               {activeId === "__broadcast__" ? (
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-orange-500 text-white ring-2 ring-white/30">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/20">
                   <Megaphone className="h-5 w-5" />
                 </div>
               ) : (
-                <AvatarCircle name={activeConvo?.partnerName || "?"} size="md" variant="solid" className="ring-2 ring-white/30" />
+                <AvatarCircle name={activeConvo?.partnerName || "?"} size="sm" variant="solid" />
               )}
               <div className="min-w-0 flex-1">
-                <p className="truncate text-base font-semibold">{activeConvo?.partnerName || "Chat"}</p>
-                {activeConvo?.partnerRole ? (
-                  <p className="truncate text-xs text-white/70">{activeConvo.partnerRole}</p>
-                ) : activeId === "__broadcast__" ? (
-                  <p className="truncate text-xs text-white/70">All church members</p>
-                ) : (
-                  <p className="truncate text-xs text-white/70">Direct message</p>
-                )}
+                <p className="truncate text-base font-medium leading-tight">
+                  {activeConvo?.partnerName || (activeId === "__broadcast__" ? "Church Broadcast" : "Chat")}
+                </p>
+                <p className="truncate text-xs text-white/80">
+                  {activeConvo?.partnerRole ||
+                    (activeId === "__broadcast__" ? "All members" : "tap here for contact info")}
+                </p>
               </div>
-              {openMenu && (
-                <button
-                  type="button"
-                  className="touch-target flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 transition hover:bg-white/20 lg:hidden"
-                  onClick={openMenu}
-                  aria-label="Open full menu"
-                >
-                  <LayoutGrid className="h-5 w-5" />
-                </button>
-              )}
             </header>
 
-            <div ref={messagesRef} className="flex-1 space-y-2 overflow-y-auto px-3 py-4">
+            <div
+              ref={messagesRef}
+              className="flex-1 overflow-y-auto px-[4%] py-3 sm:px-[6%]"
+              style={{ backgroundColor: WA.chatBg, backgroundImage: CHAT_WALLPAPER }}
+            >
               {loadingThread ? (
                 <ChatThreadSkeleton />
               ) : messages.length === 0 ? (
-                <p className="text-center text-sm text-muted-foreground">Say hello — send the first message.</p>
+                <p className="rounded-lg bg-white/80 px-4 py-2 text-center text-sm text-[#667781] shadow-sm">
+                  Messages are end-to-end organized for your church. Say hello.
+                </p>
               ) : (
-                messages.map((m) => {
-                  const mine = m.fromId === currentUser.id;
-                  const sender = members.find((x) => x.id === m.fromId);
-                  return (
-                    <div key={m.id} className={cn("flex", mine ? "justify-end" : "justify-start")}>
-                      <div
-                        className={cn(
-                          "max-w-[85%] rounded-2xl px-3.5 py-2 shadow-sm sm:max-w-[70%]",
-                          mine
-                            ? "rounded-br-md bg-primary text-white"
-                            : "rounded-bl-md border bg-card text-foreground"
-                        )}
-                      >
-                        {!mine && m.broadcast && (
-                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-highlight">
-                            Broadcast
-                          </p>
-                        )}
-                        {!mine && activeId === "__broadcast__" && sender && (
-                          <p className={cn("mb-0.5 text-xs font-medium", mine ? "text-white/80" : "text-primary")}>
-                            {sender.name}
-                          </p>
-                        )}
-                        <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{m.body}</p>
-                        <p
+                <div className="space-y-1">
+                  {threadRows.map((row) => {
+                    if (row.kind === "date") {
+                      return (
+                        <div key={row.key} className="flex justify-center py-2">
+                          <span className="rounded-lg bg-white/90 px-3 py-1 text-xs font-medium text-[#54656f] shadow-sm">
+                            {row.label}
+                          </span>
+                        </div>
+                      );
+                    }
+                    const m = row.message;
+                    const mine = m.fromId === currentUser.id;
+                    const sender = members.find((x) => x.id === m.fromId);
+                    return (
+                      <div key={m.id} className={cn("flex", mine ? "justify-end" : "justify-start")}>
+                        <div
                           className={cn(
-                            "mt-1 flex items-center justify-end gap-1.5 text-[10px]",
-                            mine ? "text-white/70" : "text-muted-foreground"
+                            "relative max-w-[min(85%,28rem)] px-2 pb-1 pt-1.5 shadow-sm",
+                            mine
+                              ? "rounded-lg rounded-tr-none bg-[#d9fdd3] text-[#111b21]"
+                              : "rounded-lg rounded-tl-none bg-white text-[#111b21]"
                           )}
                         >
-                          <MessageStatusIndicator message={m} isMine={mine} />
-                          <span>{formatTime(m.sentAt)}</span>
-                        </p>
+                          {!mine && m.broadcast && (
+                            <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-[#008069]">
+                              Broadcast
+                            </p>
+                          )}
+                          {!mine && activeId === "__broadcast__" && sender && (
+                            <p className="mb-0.5 text-xs font-semibold text-[#008069]">{sender.name}</p>
+                          )}
+                          <p className="whitespace-pre-wrap break-words pr-14 text-[14.2px] leading-[19px]">
+                            {m.body}
+                          </p>
+                          <div
+                            className="absolute bottom-1 right-2 flex items-center gap-0.5 text-[11px] text-[#667781]"
+                          >
+                            <span>{formatBubbleTime(m.sentAt)}</span>
+                            <MessageStatusIndicator message={m} isMine={mine} />
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  );
-                })
+                    );
+                  })}
+                </div>
               )}
             </div>
 
             {showComposer ? (
-              <footer className="shrink-0 border-t bg-card p-3 lg:pb-safe">
+              <footer className="shrink-0 px-2 py-2 lg:pb-safe" style={{ backgroundColor: WA.composer }}>
                 <form
                   className="flex items-end gap-2"
                   onSubmit={(e) => {
@@ -516,23 +592,26 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
                     send();
                   }}
                 >
-                  <textarea
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        send();
-                      }
-                    }}
-                    rows={1}
-                    placeholder="Type a message..."
-                    className="max-h-28 min-h-[44px] flex-1 resize-none rounded-2xl border border-input bg-muted/30 px-4 py-2.5 text-base outline-none focus:ring-2 focus:ring-ring sm:text-sm"
-                  />
+                  <div className="flex min-h-[42px] flex-1 items-end rounded-lg bg-white px-3 py-2 shadow-sm">
+                    <textarea
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          send();
+                        }
+                      }}
+                      rows={1}
+                      placeholder="Type a message"
+                      className="max-h-28 w-full resize-none bg-transparent text-[15px] text-[#111b21] outline-none placeholder:text-[#8696a0]"
+                    />
+                  </div>
                   <button
                     type="submit"
                     disabled={!draft.trim() || sending}
-                    className="touch-target flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-white transition disabled:opacity-40"
+                    className="touch-target mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-white transition disabled:opacity-40"
+                    style={{ backgroundColor: WA.header }}
                     aria-label="Send message"
                   >
                     <Send className="h-5 w-5" />
@@ -540,9 +619,12 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
                 </form>
               </footer>
             ) : (
-              <footer className="shrink-0 border-t bg-muted/40 px-4 py-3 text-center text-xs text-muted-foreground lg:pb-safe">
+              <footer
+                className="shrink-0 px-4 py-3 text-center text-xs text-[#667781] lg:pb-safe"
+                style={{ backgroundColor: WA.composer }}
+              >
                 {canBroadcast
-                  ? "View only. Use Church Broadcast above to send a new announcement."
+                  ? "View only. Use Church Broadcast in the chat list to send announcements."
                   : "You can read broadcast messages here but cannot reply in this thread."}
               </footer>
             )}

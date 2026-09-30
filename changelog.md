@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-09-30] — WhatsApp-style chat UI
+
+### Changed
+- **Communications / Chat** — WhatsApp-like layout: green headers, chat wallpaper, green/white bubbles with inline time and read ticks, date separators, and refreshed conversation list (unread badges, compact rows).
+
 ## [2026-09-30] — Chat Realtime (live messages)
 
 ### Fixed
