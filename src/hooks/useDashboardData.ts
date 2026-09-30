@@ -1,7 +1,14 @@
+import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { Member, Role } from "@/types/church";
 import { clearPageDataCache, useStaleWhileRevalidate } from "@/hooks/useStaleWhileRevalidate";
+import {
+  dashboardLog,
+  dashboardLogError,
+  dashboardLogStart,
+  logDashboardSnapshot,
+} from "@/lib/dashboard-log";
 
 export type DashboardActivity = { id: string; text: string; time: string };
 export type DashboardEvent = { id: string; title: string; date: string; time: string; rsvpIds: string[] };
@@ -137,6 +144,12 @@ async function fetchDashboardSnapshot(args: {
   fellowships: unknown[];
   departments: unknown[];
 }): Promise<DashboardSnapshot> {
+  dashboardLogStart(`fetch snapshot (${args.role}, pastoral=${args.pastoral})`);
+  dashboardLog(
+    "bootstrap counts",
+    `members=${activeMemberCount(args.members)} cells=${args.cells.length} fellowships=${args.fellowships.length}`
+  );
+
   const bootstrapCounts = {
     members: activeMemberCount(args.members),
     cells: args.cells.length,
@@ -156,21 +169,30 @@ async function fetchDashboardSnapshot(args: {
   const showEvents = args.role !== "Cell Member" && args.role !== "Church Member";
   const showAnnouncements = args.hasAnnouncementsPage && !args.pastoral;
 
-  const primaryP = args.pastoral
-    ? api<DashboardOverview>("/dashboard/overview")
-    : api<DashboardStats>("/dashboard/stats");
+  const primaryPath = args.pastoral ? "/dashboard/overview" : "/dashboard/stats";
+
+  async function fetchOptional<T>(path: string): Promise<T | null> {
+    const t0 = performance.now();
+    try {
+      const data = await api<T>(path);
+      dashboardLog(`GET ${path}`, `200 ${Math.round(performance.now() - t0)}ms`);
+      return data;
+    } catch (err) {
+      dashboardLogError(`GET ${path}`, err);
+      return null;
+    }
+  }
 
   const [actsResult, primaryResult, eventsResult, announcementsResult] = await Promise.all([
-    api<DashboardActivity[]>("/activities").catch(() => null),
-    primaryP.catch(() => null),
-    showEvents ? api<DashboardEvent[]>("/events").catch(() => null) : Promise.resolve(null),
-    showAnnouncements
-      ? api<DashboardAnnouncementItem[]>("/announcements").catch(() => null)
-      : Promise.resolve(null),
+    fetchOptional<DashboardActivity[]>("/activities"),
+    fetchOptional<DashboardOverview | DashboardStats>(primaryPath),
+    showEvents ? fetchOptional<DashboardEvent[]>("/events") : Promise.resolve(null),
+    showAnnouncements ? fetchOptional<DashboardAnnouncementItem[]>("/announcements") : Promise.resolve(null),
   ]);
 
   let stats = applyBootstrapStats();
   let overview: DashboardOverview | null = null;
+  let dataSource: "api" | "fallback" = "api";
   const activities = actsResult ?? [];
   const events = eventsResult ?? [];
   let dashboardAnnouncements: DashboardAnnouncementItem[] = [];
@@ -179,6 +201,7 @@ async function fetchDashboardSnapshot(args: {
     if (primaryResult) {
       overview = primaryResult as DashboardOverview;
     } else {
+      dataSource = "fallback";
       toast.error("Could not load dashboard overview");
       overview = buildFallbackOverview(args.role, bootstrapCounts);
       stats = applyBootstrapStats();
@@ -197,13 +220,19 @@ async function fetchDashboardSnapshot(args: {
   } else if (primaryResult) {
     stats = primaryResult as DashboardStats;
   } else {
+    dataSource = "fallback";
     toast.error("Could not load dashboard stats");
     stats = applyBootstrapStats();
   }
 
   if (announcementsResult) dashboardAnnouncements = announcementsResult.slice(0, 5);
 
-  return { stats, overview, activities, events, dashboardAnnouncements };
+  const snapshot = { stats, overview, activities, events, dashboardAnnouncements };
+  logDashboardSnapshot(
+    { role: args.role, pastoral: args.pastoral, source: dataSource },
+    snapshot
+  );
+  return snapshot;
 }
 
 type UseDashboardDataArgs = {
@@ -219,6 +248,8 @@ type UseDashboardDataArgs = {
 
 export function useDashboardData(args: UseDashboardDataArgs) {
   const cacheKey = `dashboard:${args.userId}:${args.role}`;
+  const loggedCacheHit = useRef(false);
+
   const { data, initialLoading, refreshing, reload } = useStaleWhileRevalidate<DashboardSnapshot>(
     cacheKey,
     () => fetchDashboardSnapshot(args),
@@ -226,6 +257,20 @@ export function useDashboardData(args: UseDashboardDataArgs) {
       deps: [args.pastoral, args.hasAnnouncementsPage, args.members, args.cells, args.fellowships, args.departments],
     }
   );
+
+  useEffect(() => {
+    if (!data || initialLoading) return;
+    const seenBefore = loggedCacheHit.current;
+    loggedCacheHit.current = true;
+    dashboardLog(
+      refreshing ? "UI showing data (background refresh)" : seenBefore ? "UI showing data (SWR cache)" : "UI showing data (fresh)",
+      `members=${data.stats.members} activities=${data.activities.length}`
+    );
+  }, [data, initialLoading, refreshing, args.pastoral]);
+
+  useEffect(() => {
+    dashboardLog("hook mount", `user=${args.userId} role=${args.role}`);
+  }, [args.userId, args.role]);
 
   return {
     stats: data?.stats ?? EMPTY_STATS,

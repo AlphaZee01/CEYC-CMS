@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-09-30] — Dashboard debug logs
+
+### Added
+- **`[dashboard]` console traces** (dev or `VITE_AUTH_DEBUG=true`) — per-endpoint fetch timing in `useDashboardData`, bootstrap counts, and JSON summary when dashboard data is ready / revalidated.
+
 ## [2026-09-30] — Supabase sign-in timeout on slow networks
 
 ### Fixed
