@@ -1,5 +1,14 @@
 # Changelog
 
+## [2026-09-30] — Chat rebuild (Supabase Realtime postgres_changes)
+
+### Changed
+- **Communications / Chat** — Rebuilt from modular components (`chat/ChatPage`, conversation list, thread, composer) with `useChatRealtime` subscribing to `postgres_changes` on `messages` and `message_recipients` (debounced thread/list refresh).
+- **Server** — Removed duplicate Broadcast push on send/read; live updates rely on database Realtime publication.
+
+### Added
+- **Supabase** — `chat_current_member_id()`, RLS SELECT policies for chat tables, and `supabase_realtime` publication entries for `messages` / `message_recipients`.
+
 ## [2026-09-30] — Modern chat UI (Communications)
 
 ### Changed

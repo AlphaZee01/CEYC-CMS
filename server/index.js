@@ -19,7 +19,6 @@ import { registerCompletionRoutes } from "./routes-complete.js";
 import { startJobs } from "./jobs.js";
 import { logAudit } from "./audit.js";
 import { formatCurrency } from "./currency.js";
-import { broadcastChatMessage, broadcastMessageRead } from "./realtime.js";
 import {
   canAccessFinances,
   canManageSettings,
@@ -1397,18 +1396,6 @@ app.post("/api/messages", authMiddleware, requirePage("communications"), async (
     }
   }
 
-  const payload = {
-    id,
-    fromId: req.user.member.id,
-    subject: subject || "",
-    body: body.trim(),
-    sentAt: new Date().toISOString(),
-    broadcast: !!broadcast,
-    toIds: recipients,
-    read: false,
-  };
-  broadcastChatMessage(payload, recipients).catch(() => {});
-
   res.status(201).json({ id, subject: subject || "", body: body.trim(), toIds: recipients, broadcast: !!broadcast });
 });
 
@@ -1418,12 +1405,7 @@ app.patch("/api/messages/:id/read", authMiddleware, async (req, res) => {
   const result = await db
     .prepare("UPDATE message_recipients SET read = 1 WHERE message_id = ? AND member_id = ? AND read = 0")
     .run(req.params.id, readerId);
-  if (result.changes > 0) {
-    const msg = await db.prepare("SELECT from_id, broadcast FROM messages WHERE id = ?").get(req.params.id);
-    if (msg?.from_id && msg.from_id !== readerId && !msg.broadcast) {
-      broadcastMessageRead(msg.from_id, { messageId: req.params.id, readBy: readerId }).catch(() => {});
-    }
-  }
+  // Read receipts propagate via Supabase Realtime postgres_changes on message_recipients
   res.json({ ok: true });
 });
 
