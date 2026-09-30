@@ -113,6 +113,13 @@ export function memberChatChannel(memberId: string) {
   return `member:${memberId}`;
 }
 
+/** Attach the Supabase Auth JWT to the Realtime socket (required when Realtime Authorization is on). */
+export async function syncSupabaseRealtimeAuth(): Promise<void> {
+  if (!supabase) return;
+  const token = await getSupabaseAccessToken();
+  supabase.realtime.setAuth(token ?? "");
+}
+
 export async function getSupabaseAccessToken(): Promise<string | null> {
   if (!supabase) return null;
   if (passwordSignInInProgress) {

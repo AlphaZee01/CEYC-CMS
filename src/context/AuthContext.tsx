@@ -14,6 +14,7 @@ import {
   endPasswordSignIn,
   getCachedSupabaseAccessToken,
   setCachedSupabaseAccessToken,
+  syncSupabaseRealtimeAuth,
 } from "@/lib/supabase";
 import type { AuthUser, PageId } from "@/types/church";
 import {
@@ -163,6 +164,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (event === "SIGNED_IN" && sessionHydratedRef.current) return;
 
             if (event === "TOKEN_REFRESHED" || event === "SIGNED_IN") {
+              void syncSupabaseRealtimeAuth();
               scheduleSessionRefresh();
             }
           });
@@ -215,6 +217,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           signInWithEmail(email, password)
         );
         setCachedSupabaseAccessToken(session.access_token);
+        await syncSupabaseRealtimeAuth();
         const data = await authLogTimed("GET /api/auth/me", () =>
           Promise.race([
             authApi.meWithBearer(session.access_token),

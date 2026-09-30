@@ -107,6 +107,7 @@ Then complete **Step 3** (`APP_URL` + Supabase redirect URLs + redeploy).
 | Wrong church name on login | Set `CHURCH_NAME` or update **Settings** in the app; clear browser cache. |
 | Health `database: unavailable` | DB password/ref/region wrong, or cold start still bootstrapping — retry `/api/health`. |
 | Sign-in OK but “Server profile load timed out” | Usually cold start loading the full API; deploy latest `main` (uses fast `api/light-auth-me.js` for `GET /api/auth/me`). |
+| Chat sends but other user does not see messages live | Ensure `SUPABASE_SERVICE_ROLE_KEY` on Vercel; apply `supabase/migrations/20260930120000_realtime_chat_broadcast_policy.sql`; client must use Supabase Auth (`VITE_USE_SUPABASE_AUTH=true`). |
 
 ---
 

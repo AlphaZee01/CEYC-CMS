@@ -1,5 +1,12 @@
 # Changelog
 
+## [2026-09-30] — Chat Realtime (live messages)
+
+### Fixed
+- **Chat** — call `realtime.setAuth()` with the Supabase session JWT before subscribing (required when Realtime Authorization is enabled).
+- **Server push** — chat broadcasts use `SUPABASE_SERVICE_ROLE_KEY` when set (anon-only REST broadcast often failed silently).
+- **Supabase** — migration adds `authenticated_users_receive_broadcasts` on `realtime.messages` for broadcast delivery.
+
 ## [2026-09-30] — Attendance request storm (infinite SWR loop)
 
 ### Fixed

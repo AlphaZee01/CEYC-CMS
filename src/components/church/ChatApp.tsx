@@ -2,7 +2,12 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { ArrowLeft, Check, CheckCheck, Clock, LayoutGrid, Megaphone, Search, Send } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { supabase, supabaseConfigured, memberChatChannel } from "@/lib/supabase";
+import {
+  supabase,
+  supabaseConfigured,
+  memberChatChannel,
+  syncSupabaseRealtimeAuth,
+} from "@/lib/supabase";
 import {
   loadActiveChatId,
   loadConversationCache,
@@ -156,38 +161,50 @@ export function ChatApp({ members, currentUser }: ChatAppProps) {
   useEffect(() => {
     if (!supabaseConfigured || !supabase) return;
 
-    const channel = supabase
-      .channel(memberChatChannel(currentUser.id), { config: { broadcast: { self: true } } })
-      .on("broadcast", { event: "new_message" }, ({ payload }) => {
-        const msg = payload as ChatMessage;
-        loadConversations({ silent: true });
-        if (!activeId) return;
-        const inThread =
-          activeId === "__broadcast__" || activeId.startsWith("broadcast:")
-            ? msg.broadcast
-            : msg.broadcast
-              ? false
-              : msg.fromId === activeId ||
-                (msg.fromId === currentUser.id && msg.toIds.includes(activeId)) ||
-                (msg.fromId === activeId && msg.toIds.includes(currentUser.id));
-        if (inThread) {
-          setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
-          if (msg.fromId !== currentUser.id) {
-            api(`/messages/${msg.id}/read`, { method: "PATCH" }).catch(() => {});
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
+
+    void syncSupabaseRealtimeAuth().then(() => {
+      if (cancelled || !supabase) return;
+
+      channel = supabase
+        .channel(memberChatChannel(currentUser.id), { config: { broadcast: { self: true } } })
+        .on("broadcast", { event: "new_message" }, ({ payload }) => {
+          const msg = payload as ChatMessage;
+          loadConversations({ silent: true });
+          if (!activeId) return;
+          const inThread =
+            activeId === "__broadcast__" || activeId.startsWith("broadcast:")
+              ? msg.broadcast
+              : msg.broadcast
+                ? false
+                : msg.fromId === activeId ||
+                  (msg.fromId === currentUser.id && msg.toIds.includes(activeId)) ||
+                  (msg.fromId === activeId && msg.toIds.includes(currentUser.id));
+          if (inThread) {
+            setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+            if (msg.fromId !== currentUser.id) {
+              api(`/messages/${msg.id}/read`, { method: "PATCH" }).catch(() => {});
+            }
           }
-        }
-      })
-      .on("broadcast", { event: "message_read" }, ({ payload }) => {
-        const { messageId } = payload as { messageId?: string };
-        if (!messageId) return;
-        setMessages((prev) =>
-          prev.map((m) => (m.id === messageId ? { ...m, recipientRead: true } : m))
-        );
-      })
-      .subscribe();
+        })
+        .on("broadcast", { event: "message_read" }, ({ payload }) => {
+          const { messageId } = payload as { messageId?: string };
+          if (!messageId) return;
+          setMessages((prev) =>
+            prev.map((m) => (m.id === messageId ? { ...m, recipientRead: true } : m))
+          );
+        })
+        .subscribe((status, err) => {
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+            console.warn("[chat] Realtime subscribe failed:", status, err);
+          }
+        });
+    });
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
     };
   }, [activeId, currentUser.id, loadConversations]);
 

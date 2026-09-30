@@ -4,7 +4,10 @@ let client;
 
 function getClient() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const key = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY;
   if (!url || !key) return null;
   if (!client) client = createClient(url, key);
   return client;
@@ -20,20 +23,24 @@ export async function broadcastChatMessage(message, memberIds) {
 
   await Promise.all(
     [...ids].map(async (memberId) => {
-      const channel = sb.channel(`member:${memberId}`, {
-        config: { broadcast: { self: true } },
-      });
-      // REST broadcast — no WebSocket subscribe needed; avoids send() fallback warning
-      if (typeof channel.httpSend === "function") {
-        await channel.httpSend("new_message", message);
-      } else {
-        await channel.send({
-          type: "broadcast",
-          event: "new_message",
-          payload: message,
+      try {
+        const channel = sb.channel(`member:${memberId}`, {
+          config: { broadcast: { self: true } },
         });
+        // REST broadcast — no WebSocket subscribe needed; avoids send() fallback warning
+        if (typeof channel.httpSend === "function") {
+          await channel.httpSend("new_message", message);
+        } else {
+          await channel.send({
+            type: "broadcast",
+            event: "new_message",
+            payload: message,
+          });
+        }
+        await sb.removeChannel(channel);
+      } catch (err) {
+        console.warn(`[realtime] broadcast new_message to member:${memberId} failed:`, err);
       }
-      await sb.removeChannel(channel);
     })
   );
 }
@@ -43,17 +50,21 @@ export async function broadcastMessageRead(senderId, payload) {
   const sb = getClient();
   if (!sb || !senderId) return;
 
-  const channel = sb.channel(`member:${senderId}`, {
-    config: { broadcast: { self: true } },
-  });
-  if (typeof channel.httpSend === "function") {
-    await channel.httpSend("message_read", payload);
-  } else {
-    await channel.send({
-      type: "broadcast",
-      event: "message_read",
-      payload,
+  try {
+    const channel = sb.channel(`member:${senderId}`, {
+      config: { broadcast: { self: true } },
     });
+    if (typeof channel.httpSend === "function") {
+      await channel.httpSend("message_read", payload);
+    } else {
+      await channel.send({
+        type: "broadcast",
+        event: "message_read",
+        payload,
+      });
+    }
+    await sb.removeChannel(channel);
+  } catch (err) {
+    console.warn(`[realtime] broadcast message_read to member:${senderId} failed:`, err);
   }
-  await sb.removeChannel(channel);
 }
