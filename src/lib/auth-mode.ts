@@ -8,35 +8,52 @@ let authMode: AuthMode = "jwt";
 let loaded = false;
 let loadPromise: Promise<AuthMode> | null = null;
 
-/** Fetch auth mode from server (single source of truth). */
+const BOOTSTRAP_MODE_TIMEOUT_MS = 8_000;
+
+function envFallbackMode(): AuthMode {
+  return supabaseAuthEnabled ? "supabase" : "jwt";
+}
+
+async function fetchAuthModeFromServer(): Promise<AuthMode> {
+  const retries = [0, 300];
+  let lastError: unknown;
+  authLog("loadAuthMode", `supabaseConfigured=${supabaseConfigured} viteAuth=${supabaseAuthEnabled}`);
+  for (const delayMs of retries) {
+    if (delayMs > 0) {
+      authLog("loadAuthMode retry", `wait ${delayMs}ms`);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+    try {
+      const config = await publicApi<{ authMode: AuthMode }>("/public/config");
+      const mode = config.authMode === "supabase" ? "supabase" : "jwt";
+      authLog("loadAuthMode ok", mode);
+      return mode;
+    } catch (err) {
+      lastError = err;
+      authLogError("loadAuthMode attempt failed", err);
+    }
+  }
+  authLogError("loadAuthMode using fallback", lastError);
+  return envFallbackMode();
+}
+
+/** Fetch auth mode from server (single source of truth). Never blocks longer than ~8s. */
 export async function loadAuthMode(): Promise<AuthMode> {
   if (loaded) return authMode;
   if (loadPromise) return loadPromise;
 
   loadPromise = (async () => {
-    const retries = [0, 400, 1200];
-    let lastError: unknown;
-    authLog("loadAuthMode", `supabaseConfigured=${supabaseConfigured} viteAuth=${supabaseAuthEnabled}`);
-    for (const delayMs of retries) {
-      if (delayMs > 0) {
-        authLog("loadAuthMode retry", `wait ${delayMs}ms`);
-        await new Promise((r) => setTimeout(r, delayMs));
-      }
-      try {
-        const config = await publicApi<{ authMode: AuthMode }>("/public/config");
-        authMode = config.authMode === "supabase" ? "supabase" : "jwt";
-        loaded = true;
-        authLog("loadAuthMode ok", authMode);
-        return authMode;
-      } catch (err) {
-        lastError = err;
-        authLogError("loadAuthMode attempt failed", err);
-      }
-    }
-    const fallback = supabaseAuthEnabled ? "supabase" : "jwt";
-    authLogError("loadAuthMode using fallback", lastError);
-    authLog("loadAuthMode fallback", fallback);
-    authMode = fallback;
+    const mode = await Promise.race([
+      fetchAuthModeFromServer(),
+      new Promise<AuthMode>((resolve) => {
+        setTimeout(() => {
+          const fallback = envFallbackMode();
+          authLog("loadAuthMode timeout", `using ${fallback} after ${BOOTSTRAP_MODE_TIMEOUT_MS}ms`);
+          resolve(fallback);
+        }, BOOTSTRAP_MODE_TIMEOUT_MS);
+      }),
+    ]);
+    authMode = mode;
     loaded = true;
     return authMode;
   })();

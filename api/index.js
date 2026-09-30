@@ -1,5 +1,5 @@
 import serverless from "serverless-http";
-import { app, bootstrapDatabase } from "../server/index.js";
+import { handleLightPublic, matchLightPublicPath } from "./light-public.js";
 
 export const config = {
   maxDuration: 60,
@@ -7,16 +7,33 @@ export const config = {
 
 let handler;
 let bootstrapPromise = null;
+let appModule;
+
+async function loadApp() {
+  if (!appModule) {
+    appModule = await import("../server/index.js");
+  }
+  return appModule;
+}
 
 function startBootstrap() {
   if (!bootstrapPromise) {
-    bootstrapPromise = bootstrapDatabase();
+    bootstrapPromise = loadApp().then((m) => m.bootstrapDatabase());
   }
   return bootstrapPromise;
 }
 
 export default async function vercelHandler(req, res) {
-  startBootstrap();
+  const kind = matchLightPublicPath(req.url);
+  if (kind && handleLightPublic(kind, req, res)) {
+    void startBootstrap();
+    return;
+  }
+
+  const { app, bootstrapDatabase } = await loadApp();
+  if (!bootstrapPromise) {
+    bootstrapPromise = bootstrapDatabase();
+  }
   if (!handler) {
     handler = serverless(app);
   }

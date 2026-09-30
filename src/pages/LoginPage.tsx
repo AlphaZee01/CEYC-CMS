@@ -31,11 +31,6 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
     authLog("LoginPage submit", `authLoading=${authLoading} mode=${getAuthMode()}`);
-    if (authLoading) {
-      authLog("LoginPage submit blocked", "auth still bootstrapping");
-      setError("Still loading — wait a moment and try again.");
-      return;
-    }
     setLoading(true);
     try {
       await login(email, password);
@@ -149,10 +144,13 @@ export default function LoginPage() {
               <Input label="Email address" value={email} onChange={setEmail} type="email" placeholder="pastor@celcm.org" />
               <Input label="Password" value={password} onChange={setPassword} type="password" placeholder="••••••••" />
               {error && <p className="rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
-              <Btn type="submit" className="w-full gap-2" disabled={loading || authLoading}>
-                {loading || authLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-                {authLoading ? "Loading..." : loading ? "Signing in..." : "Continue"}
+              <Btn type="submit" className="w-full gap-2" disabled={loading}>
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                {loading ? "Signing in..." : "Continue"}
               </Btn>
+              {authLoading && !loading && (
+                <p className="text-center text-xs text-muted-foreground">Checking connection…</p>
+              )}
               <div className="flex items-center justify-between text-sm">
                 <button
                   type="button"

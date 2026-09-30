@@ -131,19 +131,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let mounted = true;
 
     const init = async () => {
+      let unsubscribe: (() => void) | undefined;
       try {
         const mode = await loadAuthMode();
         authLog("Auth mode from server", mode);
 
         if (mode === "supabase" && supabase) {
-          await ensureValidSupabaseSession();
-          const hasPersistedSession = !!getCachedSupabaseAccessToken();
-          if (mounted && !hasPersistedSession) {
-            setUser(null);
-            setPages([]);
-            setDepartmentAbilities([]);
-          }
-
           const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
             if (!mounted) return;
             authLog(`Supabase auth: ${event}`, session ? "has session" : "no session");
@@ -165,18 +158,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               scheduleSessionRefresh();
             }
           });
+          unsubscribe = () => subscription.unsubscribe();
 
-          if (mounted && hasPersistedSession) void refresh();
-          return () => subscription.unsubscribe();
+          // Do not block the login UI on session restore (Vercel /api can be slow on cold start).
+          void (async () => {
+            await ensureValidSupabaseSession();
+            const hasPersistedSession = !!getCachedSupabaseAccessToken();
+            if (mounted && !hasPersistedSession) {
+              setUser(null);
+              setPages([]);
+              setDepartmentAbilities([]);
+            }
+            if (mounted && hasPersistedSession) void refresh();
+          })();
+        } else {
+          const token = localStorage.getItem("celcm_token");
+          if (token && mounted) void refresh();
         }
-
-        const token = localStorage.getItem("celcm_token");
-        if (token && mounted) void refresh();
       } finally {
         authLog("Auth bootstrap finished", "loading=false");
-        setLoading(false);
+        if (mounted) setLoading(false);
       }
-      return undefined;
+      return unsubscribe;
     };
 
     const unsubPromise = init();
@@ -205,7 +208,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         );
         setCachedSupabaseAccessToken(session.access_token);
         const data = await authLogTimed("GET /api/auth/me", () =>
-          authApi.meWithBearer(session.access_token)
+          Promise.race([
+            authApi.meWithBearer(session.access_token),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error("Server profile load timed out — try again in a moment")), 45_000)
+            ),
+          ])
         );
         applySession(setUser, setPages, setDepartmentAbilities, setBranding, data);
         authLog("Sign-in complete");

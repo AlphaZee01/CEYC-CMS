@@ -6,8 +6,10 @@ import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 const API_BASE = "/api";
 const AUTH_FETCH_TIMEOUT_MS = 55_000;
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
+const PUBLIC_CONFIG_TIMEOUT_MS = 8_000;
 
 function fetchTimeoutForPath(path: string) {
+  if (path.includes("public/config")) return PUBLIC_CONFIG_TIMEOUT_MS;
   return path.startsWith("/auth/") ? AUTH_FETCH_TIMEOUT_MS : DEFAULT_FETCH_TIMEOUT_MS;
 }
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## [2026-09-30] — Login button stuck on Loading
+
+### Fixed
+- **Login UI** — Continue is no longer disabled while auth bootstraps; slow `/api/public/config` on Vercel no longer shows infinite **Loading…** (caused by tying the button to `authLoading`).
+- **Auth bootstrap** — session restore runs in the background; `loadAuthMode` caps wait at 8s with env fallback; `/public/config` fetch timeout 8s.
+
+## [2026-09-30] — Vercel cold start / 504 fixes
+
+### Fixed
+- **Vercel API** — `/api/public/config`, branding, health, and manifest respond instantly via `api/light-public.js` without loading the full Express app; static `public/manifest.webmanifest` served from the build.
+- **Serverless bootstrap** — on Vercel, skip seed/auth-sync on every cold start; Postgres pool uses shorter timeouts and smaller `max` connections.
+- **Express** — removed top-level `await` for rate-limit (faster `server/index.js` import).
+
 ## [2026-09-30] — Sign-in debug logging
 
 ### Added

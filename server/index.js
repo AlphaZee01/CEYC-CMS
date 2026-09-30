@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import rateLimit from "express-rate-limit";
 import path from "path";
 import fs from "fs";
 import multer from "multer";
@@ -78,25 +79,29 @@ let databaseError = null;
 export async function bootstrapDatabase() {
   try {
     await initDatabase();
-    await seedDatabase(false);
-    await ensureDashboardSamples(getDb());
-    try {
-      await ensureNewcomerSampleData(getDb());
-    } catch (err) {
-      console.warn("Newcomer sample data skipped:", err.message);
-    }
-    try {
-      await ensureBirthdayData(getDb());
-    } catch (err) {
-      console.warn("Birthday sample data skipped:", err.message);
-    }
-    if (useSupabaseAuth()) {
+    if (!process.env.VERCEL) {
+      await seedDatabase(false);
+      await ensureDashboardSamples(getDb());
       try {
-        await syncAuthUsers();
+        await ensureNewcomerSampleData(getDb());
       } catch (err) {
-        console.warn("Auth sync skipped:", err.message);
+        console.warn("Newcomer sample data skipped:", err.message);
       }
-      console.log("Supabase Auth enabled.");
+      try {
+        await ensureBirthdayData(getDb());
+      } catch (err) {
+        console.warn("Birthday sample data skipped:", err.message);
+      }
+      if (useSupabaseAuth()) {
+        try {
+          await syncAuthUsers();
+        } catch (err) {
+          console.warn("Auth sync skipped:", err.message);
+        }
+        console.log("Supabase Auth enabled.");
+      }
+    } else {
+      console.log("Vercel: skipped seed/auth-sync on cold start (run db:seed locally).");
     }
     databaseReady = true;
     if (!process.env.VERCEL) {
@@ -162,7 +167,7 @@ app.use((req, res, next) => {
   next();
 });
 
-const authLimiter = (await import("express-rate-limit")).default({
+const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
   standardHeaders: true,

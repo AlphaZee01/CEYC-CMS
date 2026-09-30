@@ -25,7 +25,9 @@ async function tryPool(connectionString) {
   pool = new pg.Pool({
     connectionString,
     ssl: connectionString.includes("localhost") ? false : { rejectUnauthorized: false },
-    max: 10,
+    max: process.env.VERCEL ? 2 : 10,
+    connectionTimeoutMillis: 12_000,
+    idleTimeoutMillis: 20_000,
   });
   const client = await pool.connect();
   await client.query("SELECT 1");
