@@ -99,6 +99,20 @@ Then complete **Step 3** (`APP_URL` + Supabase redirect URLs + redeploy).
 
 ## Troubleshooting
 
+### Pushed to GitHub but Vercel did not deploy
+
+1. **Confirm GitHub has the commit** — open [github.com/AlphaZee01/CEYC-CMS/commits/main](https://github.com/AlphaZee01/CEYC-CMS/commits/main). Production should track **`main`** on **`AlphaZee01/CEYC-CMS`** (not the old `the-style-edit` repo).
+2. **Vercel → Project → Settings → Git**
+   - **Connected Git Repository** = `AlphaZee01/CEYC-CMS`
+   - **Production Branch** = `main`
+   - If the project still points at **`the-style-edit`**, either **change the connected repo** or create a **new** Vercel project imported from **CEYC-CMS**.
+3. **Deployments tab** — check the latest build for **Error** / **Canceled** (a failed deploy leaves the old site live).
+4. **Manual redeploy** — Deployments → latest **Production** → **⋯ → Redeploy**, turn **off** “Use existing Build Cache”.
+5. **Deploy Hook** (optional) — Settings → Git → **Deploy Hooks** → create hook for `main`, then `curl -X POST "<hook-url>"` after pushes.
+6. **GitHub Actions fallback** — add repo secrets `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` (see `.github/workflows/vercel-production.yml`). Each push to `main` runs `vercel --prod` even if the Vercel Git webhook failed.
+7. **CLI from your PC** — `npx vercel login` → `npx vercel link` (pick the CEYC CMS project) → `npm run vercel:deploy`.
+8. **Browser still shows old UI** — hard refresh or clear site data; PWA may cache old `index-*.js` until a new deploy updates the service worker.
+
 | Symptom | Fix |
 |---------|-----|
 | Login uses JWT / “Use Supabase Auth” error | Set `VITE_USE_SUPABASE_AUTH=true` and **redeploy** (Vite env vars need a new build). |

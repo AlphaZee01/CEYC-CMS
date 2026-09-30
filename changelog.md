@@ -1,10 +1,25 @@
 # Changelog
 
+## [2026-09-30] — Vercel deploy troubleshooting
+
+### Added
+- **GitHub Actions** — `.github/workflows/vercel-production.yml` deploys Production on push to `main` when `VERCEL_*` secrets are configured.
+- **docs/VERCEL.md** — checklist when Git pushes do not trigger a Vercel build (wrong repo/branch, failed deploy, PWA cache, CLI redeploy).
+
+## [2026-09-30] — Signup Supabase auth trigger fix
+
+### Fixed
+- **Signup** — removed legacy `on_auth_user_created` trigger that inserted into missing `public.profiles` (caused “Database error creating new user” / 500 on `/api/auth/signup`). Migration: `20260930160000_drop_legacy_auth_profiles_trigger.sql`.
+
 ## [2026-09-30] — Public signup page
 
 ### Added
 - **`/signup`** — self-registration (name, email, optional phone, password) with link from the login page.
 - **`POST /api/auth/signup`** — creates a **Church Member** account and login (Supabase or JWT). Set `ALLOW_PUBLIC_SIGNUP=false` to disable.
+- **Signup tracing** — `authLog` / `authLogError` on the signup page and in `signup()` (same as login when `VITE_AUTH_DEBUG=true` or in dev); server logs `[auth/signup]` lines.
+
+### Changed
+- **Login** — **Create account** button under **Continue** (was only a small “Sign up” text link).
 
 ## [2026-09-30] — Chat rebuild (Supabase Realtime postgres_changes)
 
