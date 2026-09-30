@@ -39,6 +39,7 @@ import {
   Mail,
   Link2,
   Megaphone,
+  Loader2,
 } from "lucide-react";
 import {
   LineChart,
@@ -64,6 +65,11 @@ import { Card, Btn, Badge, Input, Select, Textarea, Modal, PageHeader, TabBar, M
 import { DashboardSkeleton, MemberListSkeleton } from "@/components/church/skeletons";
 import { CHART_COLORS, ICON_TONES, ICON_TONE_LIST, pieSegmentColor, type IconTone } from "@/lib/icon-colors";
 import { pageHeaderProps } from "@/lib/page-icons";
+import {
+  useDashboardData,
+  type DashboardAnnouncementItem,
+  type DashboardOverview,
+} from "@/hooks/useDashboardData";
 import { getMediaEmbedUrl, getMediaOpenUrl, isGoogleDriveUrl, normalizeGoogleDriveUrl } from "@/lib/media-url";
 import {
   assignableRolesFor,
@@ -181,55 +187,6 @@ function DashboardSection({ title, icon: Icon, tone = "blue", children, classNam
     </div>
   );
 }
-
-interface DashboardOverview {
-  pastoral: boolean;
-  showFinances: boolean;
-  counts: {
-    members: number;
-    cells: number;
-    fellowships: number;
-    departments: number;
-    newMembersThisMonth: number;
-    pendingPrayers: number;
-    pendingTasks: number;
-    overdueTasks: number;
-    pendingReports: number;
-    activeFollowUps: number;
-  };
-  lastService: { date: string; present: number; absent: number; total: number; rate: number } | null;
-  previousService: { date: string; present: number; rate: number } | null;
-  lastServiceNewcomers: {
-    members: { id: string; name: string; role: string; phone: string | null; joinedAt: string }[];
-    guests: { id?: string; name: string; contact: string | null }[];
-    total: number;
-  };
-  attendanceDelta: number | null;
-  lastOffering: { date: string; tithe: number; offering: number; seed: number; total: number } | null;
-  monthFinances: { income: number; expense: number; net: number; offeringTotal: number; titheTotal: number } | null;
-  cellHealth: { avgAttendance: number; meetingsThisMonth: number; topCell: { name: string; present: number; date: string } | null };
-  serviceTrend: { date: string; present: number }[];
-  fellowshipCellAttendance: { name: string; present: number }[];
-  prayersSummary: { pending: number; prayed: number; answered: number };
-  tasksDue: { id: string; title: string; dueDate: string; priority: string; status: string }[];
-  pendingReports: { id: string; type: string; period: string; submitterName: string; attendanceCount: number; newVisitors: number; status: string }[];
-  followUpsByStage: { stage: string; count: number }[];
-  nextEvent: { id: string; title: string; date: string; time: string; location: string; rsvpCount: number } | null;
-  announcements: DashboardAnnouncementItem[];
-  birthdaysThisMonth: BirthdaysMonthSummary | null;
-}
-
-type DashboardAnnouncementItem = {
-  id: string;
-  title: string;
-  content: string;
-  target: "all" | "fellowship" | "cell" | "department" | "role" | "leaders";
-  targetId?: string;
-  targetRole?: string;
-  pinned: boolean;
-  expiresAt: string;
-  createdAt?: string;
-};
 
 function dashboardAnnouncementTargetLabel(
   a: DashboardAnnouncementItem,
@@ -848,155 +805,32 @@ function canManageSettings(role: Role) {
   return role === "Senior Pastor" || role === "Admin";
 }
 
-function activeMemberCount(members: Member[]) {
-  return members.filter((m) => m.active).length;
-}
-
-function newMembersThisMonthFromList(members: Member[]) {
-  const now = new Date();
-  const prefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  return members.filter((m) => m.active && m.joinedAt?.startsWith(prefix)).length;
-}
-
-function buildFallbackOverview(
-  role: Role,
-  counts: { members: number; cells: number; fellowships: number; departments: number; newMembersThisMonth: number }
-): DashboardOverview {
-  return {
-    pastoral: isPastoral(role) || role === "Admin",
-    showFinances: canAccessFinances(role),
-    counts: {
-      members: counts.members,
-      cells: counts.cells,
-      fellowships: counts.fellowships,
-      departments: counts.departments,
-      newMembersThisMonth: counts.newMembersThisMonth,
-      pendingPrayers: 0,
-      pendingTasks: 0,
-      overdueTasks: 0,
-      pendingReports: 0,
-      activeFollowUps: 0,
-    },
-    lastService: null,
-    previousService: null,
-    lastServiceNewcomers: { members: [], guests: [], total: 0 },
-    attendanceDelta: null,
-    lastOffering: null,
-    monthFinances: null,
-    cellHealth: { avgAttendance: 0, meetingsThisMonth: 0, topCell: null },
-    serviceTrend: [],
-    fellowshipCellAttendance: [],
-    prayersSummary: { pending: 0, prayed: 0, answered: 0 },
-    tasksDue: [],
-    pendingReports: [],
-    followUpsByStage: [],
-    nextEvent: null,
-    announcements: [],
-    birthdaysThisMonth: null,
-  };
-}
-
 // ─── Dashboard ─────────────────────────────────────────────────────────────────
 
 export function DashboardPage({ members, cells, fellowships, departments, currentUser }: PageProps) {
   const pastoral = isPastoral(currentUser.role) || currentUser.role === "Admin";
   const cellScoped = isCellScopedRole(currentUser.role);
   const myCell = cells.find((c) => c.id === currentUser.cellId);
-  const [stats, setStats] = useState({
-    members: 0,
-    cells: 0,
-    fellowships: 0,
-    departments: 0,
-    lastCellMeeting: null as string | null,
-  });
-  const [overview, setOverview] = useState<DashboardOverview | null>(null);
-  const [activities, setActivities] = useState<{ id: string; text: string; time: string }[]>([]);
-  const [events, setEvents] = useState<{ id: string; title: string; date: string; time: string; rsvpIds: string[] }[]>([]);
-  const [dashboardAnnouncements, setDashboardAnnouncements] = useState<DashboardAnnouncementItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const hasAnnouncementsPage = PAGE_ACCESS[currentUser.role]?.includes("announcements");
 
-  useEffect(() => {
-    let cancelled = false;
-    const bootstrapCounts = {
-      members: activeMemberCount(members),
-      cells: cells.length,
-      fellowships: fellowships.length,
-      departments: departments.length,
-      newMembersThisMonth: newMembersThisMonthFromList(members),
-    };
-
-    const applyBootstrapStats = () => {
-      setStats({
-        members: bootstrapCounts.members,
-        cells: bootstrapCounts.cells,
-        fellowships: bootstrapCounts.fellowships,
-        departments: bootstrapCounts.departments,
-        lastCellMeeting: null,
-      });
-    };
-
-    setLoading(true);
-    const showEvents =
-      currentUser.role !== "Cell Member" && currentUser.role !== "Church Member";
-    const showAnnouncements = hasAnnouncementsPage && !pastoral;
-
-    (async () => {
-      const primaryP = pastoral
-        ? api<DashboardOverview>("/dashboard/overview")
-        : api<typeof stats>("/dashboard/stats");
-
-      const [actsResult, primaryResult, eventsResult, announcementsResult] = await Promise.all([
-        api<typeof activities>("/activities").catch(() => null),
-        primaryP.catch(() => null),
-        showEvents ? api<typeof events>("/events").catch(() => null) : Promise.resolve(null),
-        showAnnouncements
-          ? api<DashboardAnnouncementItem[]>("/announcements").catch(() => null)
-          : Promise.resolve(null),
-      ]);
-
-      if (cancelled) return;
-
-      if (actsResult) setActivities(actsResult);
-
-      if (pastoral) {
-        if (primaryResult) {
-          setOverview(primaryResult);
-        } else {
-          toast.error("Could not load dashboard overview");
-          setOverview(buildFallbackOverview(currentUser.role, bootstrapCounts));
-          applyBootstrapStats();
-          const s = await api<typeof stats>("/dashboard/stats").catch(() => null);
-          if (!cancelled && s) {
-            setStats(s);
-            setOverview(
-              buildFallbackOverview(currentUser.role, {
-                ...bootstrapCounts,
-                members: s.members,
-                cells: s.cells,
-                fellowships: s.fellowships,
-                departments: s.departments,
-              })
-            );
-          }
-        }
-      } else if (primaryResult) {
-        setStats(primaryResult);
-      } else {
-        toast.error("Could not load dashboard stats");
-        applyBootstrapStats();
-      }
-
-      if (eventsResult) setEvents(eventsResult);
-      if (announcementsResult) setDashboardAnnouncements(announcementsResult.slice(0, 5));
-    })().finally(() => {
-      if (!cancelled) setLoading(false);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentUser.role, pastoral, hasAnnouncementsPage, members, cells, fellowships, departments]);
+  const {
+    stats,
+    overview,
+    activities,
+    events,
+    dashboardAnnouncements,
+    initialLoading,
+    refreshing,
+  } = useDashboardData({
+    userId: currentUser.id,
+    role: currentUser.role,
+    pastoral,
+    hasAnnouncementsPage: !!hasAnnouncementsPage,
+    members,
+    cells,
+    fellowships,
+    departments,
+  });
 
   return (
     <div className="space-y-6">
@@ -1008,8 +842,20 @@ export function DashboardPage({ members, cells, fellowships, departments, curren
             ? `Church overview · Welcome, ${currentUser.name} · ${currentUser.role}`
             : `Welcome back, ${currentUser.name} · ${currentUser.role}`
         }
+        action={
+          refreshing ? (
+            <span
+              className="inline-flex items-center gap-2 text-sm text-muted-foreground"
+              aria-live="polite"
+              title="Refreshing dashboard"
+            >
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+              Updating…
+            </span>
+          ) : undefined
+        }
       />
-      {loading ? (
+      {initialLoading ? (
         <DashboardSkeleton pastoral={pastoral} />
       ) : pastoral && overview ? (
         <PastorDashboard

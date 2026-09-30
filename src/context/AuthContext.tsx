@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { api, authApi, fetchBootstrap, setToken } from "@/lib/api";
+import { clearDashboardDataCache } from "@/hooks/useDashboardData";
 import { loadAuthMode, useSupabaseForAuth } from "@/lib/auth-mode";
 import {
   supabase,
@@ -88,6 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setDepartmentAbilities([]);
     setToken(null);
     sessionHydratedRef.current = false;
+    clearDashboardDataCache();
     if (useSupabaseForAuth()) await clearStaleSupabaseSession();
   }, []);
 

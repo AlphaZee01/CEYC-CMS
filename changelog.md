@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-09-30] — Dashboard stale-while-revalidate
+
+### Changed
+- **Dashboard** — caches the last loaded home data per user; returning to Dashboard shows previous content immediately and refreshes in the background with an **Updating…** spinner on the header.
+
 ## [2026-09-30] — Bootstrap timeout on Vercel
 
 ### Fixed
