@@ -1,9 +1,14 @@
 # Changelog
 
-## [2026-09-30] — WhatsApp-style chat UI
+## [2026-09-30] — Modern chat UI (Communications)
 
 ### Changed
-- **Communications / Chat** — WhatsApp-like layout: green headers, chat wallpaper, green/white bubbles with inline time and read ticks, date separators, and refreshed conversation list (unread badges, compact rows).
+- **Communications / Chat** — Refined messaging UI to match the rest of CEYC CMS: theme primary bubbles, glassy headers, soft gradient thread background, rounded composer, and cleaner conversation list (replaces flat legacy-green clone).
+
+## [2026-09-30] — WhatsApp-style chat UI (superseded)
+
+### Changed
+- **Communications / Chat** — Earlier WhatsApp-like layout (replaced by modern theme-aligned UI above).
 
 ## [2026-09-30] — Chat Realtime (live messages)
 
