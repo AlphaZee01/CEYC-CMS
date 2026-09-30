@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-09-30] — Attendance request storm (infinite SWR loop)
+
+### Fixed
+- **`useStaleWhileRevalidate`** — no longer depends on `initialData` / `revalidate` identity in effects (inline `{ records: [] }` or `initialData: []` was new every render and re-triggered fetch forever).
+- **Fetch** — dedupe in-flight revalidations per hook instance so one background refresh runs at a time.
+
 ## [2026-09-30] — Stale PWA bundle (`load is not defined`)
 
 ### Fixed
