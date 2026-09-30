@@ -1,6 +1,6 @@
 import { useState, useEffect, type FormEvent } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
-import { Loader2, Mail, Lock, ArrowRight } from "lucide-react";
+import { Loader2, Mail, Lock, ArrowRight, UserPlus } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { api } from "@/lib/api";
 import { resetPasswordForEmail } from "@/lib/supabase";
@@ -164,9 +164,10 @@ export default function LoginPage() {
               </form>
               <Link
                 to="/signup"
-                className="mt-3 flex min-h-[44px] w-full items-center justify-center rounded-xl border border-border bg-background px-4 py-2.5 text-sm font-semibold text-foreground shadow-sm transition hover:bg-muted/80 active:scale-[0.98]"
+                className="mt-3 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-border bg-background px-4 py-2.5 text-sm font-semibold text-foreground shadow-sm transition hover:bg-muted/80 active:scale-[0.98]"
               >
-                Create account
+                <UserPlus className="h-4 w-4" aria-hidden />
+                Sign up
               </Link>
             </>
           )}

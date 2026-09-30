@@ -3,7 +3,7 @@
 ## [2026-09-30] — Signup button / form UX
 
 ### Fixed
-- **Login** — “Create account” is a router `Link` outside the sign-in form (avoids nested-button / submit quirks).
+- **Login** — full-width **Sign up** router link below Continue (replaces small text link / “Create account” label); works on Vercel SPA routing.
 - **Signup** — `noValidate` plus visible validation for name, email, and password; toast + inline errors on failure; redirect to `/app` after success.
 - **Vercel** — light `/api/public/config` includes `allowSignup` (matches full API).
 
