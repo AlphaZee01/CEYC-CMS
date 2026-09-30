@@ -2470,7 +2470,7 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
           cells={cells}
           fellowships={fellowships}
           currentUser={currentUser}
-          onRecordUpdated={load}
+          onRecordUpdated={loadAttendance}
         />
       )}
 

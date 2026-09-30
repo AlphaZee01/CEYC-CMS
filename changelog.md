@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-09-30] — Attendance page crash
+
+### Fixed
+- **Attendance** — calendar refresh callback used removed `load` after SWR refactor (`loadAttendance`).
+
 ## [2026-09-30] — App-wide stale-while-revalidate
 
 ### Changed
