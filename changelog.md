@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-09-30] — Stale PWA bundle (`load is not defined`)
+
+### Fixed
+- **Deploy/cache** — PWA `skipWaiting` / `clientsClaim`; `Cache-Control: no-cache` for `index.html` and service worker on Vercel so fixes reach browsers after redeploy.
+- **Debug** — production console logs `[CEYC CMS] client build <id>` (git SHA on Vercel) to confirm you are not on an old `index-*.js` bundle.
+
 ## [2026-09-30] — Attendance page crash
 
 ### Fixed

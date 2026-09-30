@@ -5,7 +5,12 @@ import path from "path";
 import { componentTagger } from "lovable-tagger";
 
 // https://vitejs.dev/config/
+const appBuildId = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || new Date().toISOString();
+
 export default defineConfig(({ mode }) => ({
+  define: {
+    "import.meta.env.VITE_APP_BUILD_ID": JSON.stringify(appBuildId),
+  },
   server: {
     host: "::",
     port: 8080,
@@ -34,6 +39,9 @@ export default defineConfig(({ mode }) => ({
       injectRegister: "auto",
       manifest: false,
       workbox: {
+        skipWaiting: true,
+        clientsClaim: true,
+        cleanupOutdatedCaches: true,
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
         navigateFallback: "index.html",
         navigateFallbackDenylist: [/^\/api\//, /^\/uploads\//, /^\/manifest\.webmanifest$/],
