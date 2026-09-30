@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, createContext, useContext, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, LogOut, X } from "lucide-react";
+import { Bell, Loader2, LogOut, X } from "lucide-react";
 import { memberProfilePath } from "@/lib/rbac";
 import { Badge, AvatarCircle, cn } from "@/components/church/ui";
 import { PAGE_META, type PageId, type Member } from "@/types/church";
@@ -34,6 +34,8 @@ export interface AppLayoutProps {
   children: ReactNode;
   user: Member;
   settings: { name: string; logoUrl?: string; tagline?: string };
+  /** Background sync (e.g. bootstrap revalidate) */
+  syncing?: boolean;
 }
 
 const NAV_GROUPS: { label: string; ids: PageId[] }[] = [
@@ -48,7 +50,7 @@ function pageLabel(id: PageId) {
   return PAGE_META.find((p) => p.id === id)?.label ?? id;
 }
 
-export function AppLayout({ activePage, onNavigate, pages, children, user, settings }: AppLayoutProps) {
+export function AppLayout({ activePage, onNavigate, pages, children, user, settings, syncing }: AppLayoutProps) {
   const { logout } = useAuth();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -218,6 +220,15 @@ export function AppLayout({ activePage, onNavigate, pages, children, user, setti
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-2">
+              {syncing && (
+                <span
+                  className="flex h-10 w-10 items-center justify-center text-muted-foreground"
+                  title="Syncing data"
+                  aria-label="Syncing data"
+                >
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                </span>
+              )}
               <div ref={notificationsRef} className="relative">
                 <button
                   type="button"

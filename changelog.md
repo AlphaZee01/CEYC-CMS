@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-09-30] — App-wide stale-while-revalidate
+
+### Changed
+- **All app pages** — shared `useStaleWhileRevalidate` caches API data per user/route; navigating back shows the last view immediately and re-fetches in the background with **Updating…** on the page header (shell spinner while bootstrap revalidates).
+- **Bootstrap** — members/cells/departments cache no longer blocks the whole app on `onRefresh`; only the first visit shows the full skeleton.
+
 ## [2026-09-30] — Dashboard stale-while-revalidate
 
 ### Changed

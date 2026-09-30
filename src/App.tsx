@@ -27,7 +27,7 @@ import type { PageId, Member, Cell, Fellowship, Department, Role } from "@/types
 import { brandingFromSettingsRecord } from "@/lib/branding";
 import type { ChurchSettings } from "@/pages/church/ChurchPages";
 import { PAGE_META } from "@/types/church";
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Toaster } from "sonner";
 
 const PAGE_IDS = new Set<PageId>(PAGE_META.map((p) => p.id));
@@ -54,7 +54,7 @@ function isPastoralRole(role: Role) {
 
 function ChurchApp() {
   const { user, pages, branding, syncBranding } = useAuth();
-  const { data, loading, reload } = useBootstrap(!!user);
+  const { data, loading, refreshing: bootstrapRefreshing, reload } = useBootstrap(!!user, user?.member.id);
   const location = useLocation();
   const navigate = useNavigate();
   const activePage = pageFromPath(location.pathname);
@@ -91,7 +91,7 @@ function ChurchApp() {
       ? brandingFromSettingsRecord(bootstrapSettings)
       : branding;
 
-  if (loading || !data) {
+  if ((loading && !data) || !data) {
     return (
       <AppLayout
         activePage={activePage}
@@ -99,6 +99,7 @@ function ChurchApp() {
         pages={pages}
         user={user.member}
         settings={layoutSettings}
+        syncing={bootstrapRefreshing}
       >
         <DashboardSkeleton pastoral={isPastoralRole(user.member.role)} />
       </AppLayout>
@@ -114,6 +115,19 @@ function ChurchApp() {
     currentUser: user.member,
     onRefresh: reload,
   };
+
+  const layout = (content: ReactNode) => (
+    <AppLayout
+      activePage={activePage}
+      onNavigate={setActivePage}
+      pages={pages}
+      user={user.member}
+      settings={layoutSettings}
+      syncing={bootstrapRefreshing}
+    >
+      {content}
+    </AppLayout>
+  );
 
   const renderPage = () => {
     if (profileMemberId) {
@@ -140,17 +154,7 @@ function ChurchApp() {
     }
   };
 
-  return (
-    <AppLayout
-      activePage={activePage}
-      onNavigate={setActivePage}
-      pages={pages}
-      user={user.member}
-      settings={layoutSettings}
-    >
-      {renderPage()}
-    </AppLayout>
-  );
+  return layout(renderPage());
 }
 
 function ProtectedApp() {

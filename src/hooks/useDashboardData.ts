@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { Member, Role } from "@/types/church";
+import { clearPageDataCache, useStaleWhileRevalidate } from "@/hooks/useStaleWhileRevalidate";
 
 export type DashboardActivity = { id: string; text: string; time: string };
 export type DashboardEvent = { id: string; title: string; date: string; time: string; rsvpIds: string[] };
@@ -78,16 +78,6 @@ const EMPTY_STATS: DashboardStats = {
   lastCellMeeting: null,
 };
 
-const cache = new Map<string, DashboardSnapshot>();
-
-export function clearDashboardDataCache() {
-  cache.clear();
-}
-
-function cacheKey(userId: string, role: Role) {
-  return `${userId}:${role}`;
-}
-
 function activeMemberCount(members: Member[]) {
   return members.filter((m) => m.active).length;
 }
@@ -138,6 +128,84 @@ function buildFallbackOverview(
   };
 }
 
+async function fetchDashboardSnapshot(args: {
+  role: Role;
+  pastoral: boolean;
+  hasAnnouncementsPage: boolean;
+  members: Member[];
+  cells: unknown[];
+  fellowships: unknown[];
+  departments: unknown[];
+}): Promise<DashboardSnapshot> {
+  const bootstrapCounts = {
+    members: activeMemberCount(args.members),
+    cells: args.cells.length,
+    fellowships: args.fellowships.length,
+    departments: args.departments.length,
+    newMembersThisMonth: newMembersThisMonthFromList(args.members),
+  };
+
+  const applyBootstrapStats = (): DashboardStats => ({
+    members: bootstrapCounts.members,
+    cells: bootstrapCounts.cells,
+    fellowships: bootstrapCounts.fellowships,
+    departments: bootstrapCounts.departments,
+    lastCellMeeting: null,
+  });
+
+  const showEvents = args.role !== "Cell Member" && args.role !== "Church Member";
+  const showAnnouncements = args.hasAnnouncementsPage && !args.pastoral;
+
+  const primaryP = args.pastoral
+    ? api<DashboardOverview>("/dashboard/overview")
+    : api<DashboardStats>("/dashboard/stats");
+
+  const [actsResult, primaryResult, eventsResult, announcementsResult] = await Promise.all([
+    api<DashboardActivity[]>("/activities").catch(() => null),
+    primaryP.catch(() => null),
+    showEvents ? api<DashboardEvent[]>("/events").catch(() => null) : Promise.resolve(null),
+    showAnnouncements
+      ? api<DashboardAnnouncementItem[]>("/announcements").catch(() => null)
+      : Promise.resolve(null),
+  ]);
+
+  let stats = applyBootstrapStats();
+  let overview: DashboardOverview | null = null;
+  const activities = actsResult ?? [];
+  const events = eventsResult ?? [];
+  let dashboardAnnouncements: DashboardAnnouncementItem[] = [];
+
+  if (args.pastoral) {
+    if (primaryResult) {
+      overview = primaryResult as DashboardOverview;
+    } else {
+      toast.error("Could not load dashboard overview");
+      overview = buildFallbackOverview(args.role, bootstrapCounts);
+      stats = applyBootstrapStats();
+      const s = await api<DashboardStats>("/dashboard/stats").catch(() => null);
+      if (s) {
+        stats = s;
+        overview = buildFallbackOverview(args.role, {
+          ...bootstrapCounts,
+          members: s.members,
+          cells: s.cells,
+          fellowships: s.fellowships,
+          departments: s.departments,
+        });
+      }
+    }
+  } else if (primaryResult) {
+    stats = primaryResult as DashboardStats;
+  } else {
+    toast.error("Could not load dashboard stats");
+    stats = applyBootstrapStats();
+  }
+
+  if (announcementsResult) dashboardAnnouncements = announcementsResult.slice(0, 5);
+
+  return { stats, overview, activities, events, dashboardAnnouncements };
+}
+
 type UseDashboardDataArgs = {
   userId: string;
   role: Role;
@@ -149,151 +217,28 @@ type UseDashboardDataArgs = {
   departments: unknown[];
 };
 
-export function useDashboardData({
-  userId,
-  role,
-  pastoral,
-  hasAnnouncementsPage,
-  members,
-  cells,
-  fellowships,
-  departments,
-}: UseDashboardDataArgs) {
-  const key = cacheKey(userId, role);
-  const snapshot = cache.get(key);
-
-  const [stats, setStats] = useState<DashboardStats>(snapshot?.stats ?? EMPTY_STATS);
-  const [overview, setOverview] = useState<DashboardOverview | null>(snapshot?.overview ?? null);
-  const [activities, setActivities] = useState<DashboardActivity[]>(snapshot?.activities ?? []);
-  const [events, setEvents] = useState<DashboardEvent[]>(snapshot?.events ?? []);
-  const [dashboardAnnouncements, setDashboardAnnouncements] = useState<DashboardAnnouncementItem[]>(
-    snapshot?.dashboardAnnouncements ?? []
+export function useDashboardData(args: UseDashboardDataArgs) {
+  const cacheKey = `dashboard:${args.userId}:${args.role}`;
+  const { data, initialLoading, refreshing, reload } = useStaleWhileRevalidate<DashboardSnapshot>(
+    cacheKey,
+    () => fetchDashboardSnapshot(args),
+    {
+      deps: [args.pastoral, args.hasAnnouncementsPage, args.members, args.cells, args.fellowships, args.departments],
+    }
   );
-  const [initialLoading, setInitialLoading] = useState(!snapshot);
-  const [refreshing, setRefreshing] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    const bootstrapCounts = {
-      members: activeMemberCount(members),
-      cells: cells.length,
-      fellowships: fellowships.length,
-      departments: departments.length,
-      newMembersThisMonth: newMembersThisMonthFromList(members),
-    };
-
-    const applyBootstrapStats = (): DashboardStats => ({
-      members: bootstrapCounts.members,
-      cells: bootstrapCounts.cells,
-      fellowships: bootstrapCounts.fellowships,
-      departments: bootstrapCounts.departments,
-      lastCellMeeting: null,
-    });
-
-    if (cache.has(key)) setRefreshing(true);
-    else setInitialLoading(true);
-
-    const showEvents = role !== "Cell Member" && role !== "Church Member";
-    const showAnnouncements = hasAnnouncementsPage && !pastoral;
-
-    (async () => {
-      const primaryP = pastoral
-        ? api<DashboardOverview>("/dashboard/overview")
-        : api<DashboardStats>("/dashboard/stats");
-
-      const [actsResult, primaryResult, eventsResult, announcementsResult] = await Promise.all([
-        api<DashboardActivity[]>("/activities").catch(() => null),
-        primaryP.catch(() => null),
-        showEvents ? api<DashboardEvent[]>("/events").catch(() => null) : Promise.resolve(null),
-        showAnnouncements
-          ? api<DashboardAnnouncementItem[]>("/announcements").catch(() => null)
-          : Promise.resolve(null),
-      ]);
-
-      if (cancelled) return;
-
-      const prior = cache.get(key);
-      let nextStats = prior?.stats ?? applyBootstrapStats();
-      let nextOverview = prior?.overview ?? null;
-      let nextActivities = prior?.activities ?? [];
-      let nextEvents = prior?.events ?? [];
-      let nextAnnouncements = prior?.dashboardAnnouncements ?? [];
-
-      if (actsResult) {
-        nextActivities = actsResult;
-        setActivities(actsResult);
-      }
-
-      if (pastoral) {
-        if (primaryResult) {
-          nextOverview = primaryResult;
-          setOverview(primaryResult);
-        } else {
-          toast.error("Could not load dashboard overview");
-          const fallback = buildFallbackOverview(role, bootstrapCounts);
-          nextOverview = fallback;
-          setOverview(fallback);
-          nextStats = applyBootstrapStats();
-          setStats(nextStats);
-          const s = await api<DashboardStats>("/dashboard/stats").catch(() => null);
-          if (!cancelled && s) {
-            nextStats = s;
-            setStats(s);
-            nextOverview = buildFallbackOverview(role, {
-              ...bootstrapCounts,
-              members: s.members,
-              cells: s.cells,
-              fellowships: s.fellowships,
-              departments: s.departments,
-            });
-            setOverview(nextOverview);
-          }
-        }
-      } else if (primaryResult) {
-        nextStats = primaryResult;
-        setStats(primaryResult);
-      } else {
-        toast.error("Could not load dashboard stats");
-        nextStats = applyBootstrapStats();
-        setStats(nextStats);
-      }
-
-      if (eventsResult) {
-        nextEvents = eventsResult;
-        setEvents(eventsResult);
-      }
-      if (announcementsResult) {
-        nextAnnouncements = announcementsResult.slice(0, 5);
-        setDashboardAnnouncements(nextAnnouncements);
-      }
-
-      cache.set(key, {
-        stats: nextStats,
-        overview: nextOverview,
-        activities: nextActivities,
-        events: nextEvents,
-        dashboardAnnouncements: nextAnnouncements,
-      });
-    })().finally(() => {
-      if (!cancelled) {
-        setInitialLoading(false);
-        setRefreshing(false);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh when bootstrap lists change
-  }, [key, pastoral, hasAnnouncementsPage, role, members, cells, fellowships, departments]);
 
   return {
-    stats,
-    overview,
-    activities,
-    events,
-    dashboardAnnouncements,
+    stats: data?.stats ?? EMPTY_STATS,
+    overview: data?.overview ?? null,
+    activities: data?.activities ?? [],
+    events: data?.events ?? [],
+    dashboardAnnouncements: data?.dashboardAnnouncements ?? [],
     initialLoading,
     refreshing,
+    reload,
   };
+}
+
+export function clearDashboardDataCache() {
+  clearPageDataCache();
 }

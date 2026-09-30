@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
-import { api, authApi, fetchBootstrap, setToken } from "@/lib/api";
-import { clearDashboardDataCache } from "@/hooks/useDashboardData";
+import { authApi, fetchBootstrap, setToken } from "@/lib/api";
+import { useStaleWhileRevalidate } from "@/hooks/useStaleWhileRevalidate";
+import { clearPageDataCache } from "@/hooks/useStaleWhileRevalidate";
 import { loadAuthMode, useSupabaseForAuth } from "@/lib/auth-mode";
 import {
   supabase,
@@ -89,7 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setDepartmentAbilities([]);
     setToken(null);
     sessionHydratedRef.current = false;
-    clearDashboardDataCache();
+    clearPageDataCache();
     if (useSupabaseForAuth()) await clearStaleSupabaseSession();
   }, []);
 
@@ -280,31 +281,25 @@ export function useAuth() {
   return ctx;
 }
 
-export function useBootstrap(enabled: boolean) {
-  const [data, setData] = useState<{
-    members: unknown[];
-    fellowships: unknown[];
-    cells: unknown[];
-    departments: unknown[];
-    settings: Record<string, string>;
-  } | null>(null);
-  const [loading, setLoading] = useState(true);
+export type BootstrapData = {
+  members: unknown[];
+  fellowships: unknown[];
+  cells: unknown[];
+  departments: unknown[];
+  settings: Record<string, string>;
+};
 
-  const reload = useCallback(async () => {
-    if (!enabled) return;
-    setLoading(true);
-    try {
-      const d = await authLogTimed("GET /api/bootstrap", () => fetchBootstrap<typeof data>());
-      setData(d);
-      authLog("Bootstrap loaded", `${(d?.members as unknown[])?.length ?? 0} members`);
-    } finally {
-      setLoading(false);
-    }
-  }, [enabled]);
+export function useBootstrap(enabled: boolean, userId?: string) {
+  const cacheKey = userId ? `bootstrap:${userId}` : "bootstrap:pending";
+  const { data, initialLoading, refreshing, reload } = useStaleWhileRevalidate<BootstrapData>(
+    cacheKey,
+    () =>
+      authLogTimed("GET /api/bootstrap", () => fetchBootstrap<BootstrapData>()).then((d) => {
+        authLog("Bootstrap loaded", `${(d?.members as unknown[])?.length ?? 0} members`);
+        return d;
+      }),
+    { enabled }
+  );
 
-  useEffect(() => {
-    reload();
-  }, [reload]);
-
-  return { data, loading, reload };
+  return { data: data ?? null, loading: initialLoading, refreshing, reload };
 }

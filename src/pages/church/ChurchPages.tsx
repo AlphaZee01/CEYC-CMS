@@ -39,7 +39,6 @@ import {
   Mail,
   Link2,
   Megaphone,
-  Loader2,
 } from "lucide-react";
 import {
   LineChart,
@@ -70,6 +69,9 @@ import {
   type DashboardAnnouncementItem,
   type DashboardOverview,
 } from "@/hooks/useDashboardData";
+import { useStaleWhileRevalidate } from "@/hooks/useStaleWhileRevalidate";
+import { mergePageHeaderAction } from "@/lib/page-header-action";
+import { PageRefreshIndicator } from "@/components/church/PageRefreshIndicator";
 import { getMediaEmbedUrl, getMediaOpenUrl, isGoogleDriveUrl, normalizeGoogleDriveUrl } from "@/lib/media-url";
 import {
   assignableRolesFor,
@@ -842,18 +844,7 @@ export function DashboardPage({ members, cells, fellowships, departments, curren
             ? `Church overview · Welcome, ${currentUser.name} · ${currentUser.role}`
             : `Welcome back, ${currentUser.name} · ${currentUser.role}`
         }
-        action={
-          refreshing ? (
-            <span
-              className="inline-flex items-center gap-2 text-sm text-muted-foreground"
-              aria-live="polite"
-              title="Refreshing dashboard"
-            >
-              <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-              Updating…
-            </span>
-          ) : undefined
-        }
+        action={mergePageHeaderAction(refreshing)}
       />
       {initialLoading ? (
         <DashboardSkeleton pastoral={pastoral} />
@@ -942,7 +933,6 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
   const cellScoped = isCellScopedRole(currentUser.role);
   const myCell = cells.find((c) => c.id === currentUser.cellId);
   const roleOptions = assignableRolesFor(currentUser.role);
-  const [list, setList] = useState<Member[]>([]);
   const [search, setSearch] = useState("");
   const [filterRole, setFilterRole] = useState("");
   const [filterCell, setFilterCell] = useState(cellScoped ? currentUser.cellId || "" : "");
@@ -950,27 +940,33 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
   const [filterDept, setFilterDept] = useState("");
   const [modal, setModal] = useState<"add" | "edit" | null>(null);
   const [edit, setEdit] = useState<Partial<Member> & { password?: string }>({});
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-
-  const load = useCallback(() => {
-    const params = new URLSearchParams();
-    if (search) params.set("search", search);
-    if (filterRole) params.set("role", filterRole);
-    if (filterCell) params.set("cellId", filterCell);
-    if (filterFellowship) params.set("fellowshipId", filterFellowship);
-    if (filterDept) params.set("departmentId", filterDept);
-    setLoading(true);
-    api<Member[]>(`/members?${params}`)
-      .then(setList)
-      .catch(() => setList(members))
-      .finally(() => setLoading(false));
-  }, [search, filterRole, filterCell, filterFellowship, filterDept, members]);
+  const [debouncedQuery, setDebouncedQuery] = useState("");
 
   useEffect(() => {
-    const t = setTimeout(load, 300);
+    const t = setTimeout(() => setDebouncedQuery(`${search}|${filterRole}|${filterCell}|${filterFellowship}|${filterDept}`), 300);
     return () => clearTimeout(t);
-  }, [load]);
+  }, [search, filterRole, filterCell, filterFellowship, filterDept]);
+
+  const membersQueryKey = `members:${currentUser.id}:${debouncedQuery}`;
+  const {
+    data: list = members,
+    initialLoading: loading,
+    refreshing: membersRefreshing,
+    reload: reloadMembers,
+  } = useStaleWhileRevalidate<Member[]>(
+    membersQueryKey,
+    () => {
+      const params = new URLSearchParams();
+      if (search) params.set("search", search);
+      if (filterRole) params.set("role", filterRole);
+      if (filterCell) params.set("cellId", filterCell);
+      if (filterFellowship) params.set("fellowshipId", filterFellowship);
+      if (filterDept) params.set("departmentId", filterDept);
+      return api<Member[]>(`/members?${params}`).catch(() => members);
+    },
+    { initialData: members, deps: [debouncedQuery] }
+  );
 
   const saveMember = async () => {
     if (!edit.name || !edit.email) return;
@@ -1011,7 +1007,7 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
       }
       setModal(null);
       setEdit({});
-      load();
+      reloadMembers();
       onRefresh();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Save failed");
@@ -1024,7 +1020,7 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
     if (!confirm(`Deactivate ${m.name}?`)) return;
     try {
       await api(`/members/${m.id}`, { method: "PUT", body: JSON.stringify({ active: false }) });
-      load();
+      reloadMembers();
       onRefresh();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed");
@@ -1037,7 +1033,8 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
         {...pageHeaderProps("members")}
         title="Members"
         subtitle={membersPageSubtitle(currentUser.role, myCell?.name)}
-        action={
+        action={mergePageHeaderAction(
+          membersRefreshing,
           canCreateMembers(currentUser.role) ? (
             <Btn
               onClick={() => {
@@ -1053,7 +1050,7 @@ export function MembersPage({ members, cells, fellowships, departments, currentU
               <Plus className="h-4 w-4" /> Add Member
             </Btn>
           ) : undefined
-        }
+        )}
       />
       <div className={cn("grid grid-cols-1 gap-3 sm:grid-cols-2", cellScoped ? "lg:grid-cols-3" : "lg:grid-cols-5")}>
         <div className={cn("relative", cellScoped ? "lg:col-span-2" : "lg:col-span-2")}>
@@ -1214,9 +1211,6 @@ export function MemberProfilePage({
 }: PageProps & { memberId: string }) {
   const navigate = useNavigate();
   const { refresh: refreshAuth } = useAuth();
-  const [member, setMember] = useState<Member | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [editOpen, setEditOpen] = useState(false);
   const [edit, setEdit] = useState<Partial<Member>>({});
   const [saving, setSaving] = useState(false);
@@ -1224,22 +1218,23 @@ export function MemberProfilePage({
   const roleOptions = assignableRolesFor(currentUser.role);
   const cellScoped = isCellScopedRole(currentUser.role);
   const myCell = cells.find((c) => c.id === currentUser.cellId);
+  const bootstrapMember = members.find((m) => m.id === memberId) ?? null;
 
-  const load = useCallback(() => {
-    setLoading(true);
-    setError("");
-    api<Member>(`/members/${memberId}`)
-      .then(setMember)
-      .catch((e) => {
-        setMember(null);
-        setError(e instanceof Error ? e.message : "Failed to load profile");
-      })
-      .finally(() => setLoading(false));
-  }, [memberId]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const {
+    data: member,
+    initialLoading: loading,
+    refreshing: profileRefreshing,
+    error: loadError,
+    reload: load,
+  } = useStaleWhileRevalidate<Member | null>(
+    `member-profile:${memberId}`,
+    () =>
+      api<Member>(`/members/${memberId}`).catch(() => {
+        throw new Error("Failed to load profile");
+      }),
+    { initialData: bootstrapMember, deps: [memberId] }
+  );
+  const error = loadError ?? (!loading && !member ? "Member not found" : "");
 
   const saveMember = async () => {
     if (!edit.id || !edit.name || !edit.email) return;
@@ -1327,6 +1322,7 @@ export function MemberProfilePage({
         <Btn variant="ghost" onClick={backTo}>
           <ArrowLeft className="h-4 w-4" /> Back
         </Btn>
+        {profileRefreshing && <PageRefreshIndicator />}
         {canEdit && (
           <Btn
             variant="secondary"
@@ -1502,8 +1498,20 @@ export function MemberProfilePage({
 // ─── Cells ─────────────────────────────────────────────────────────────────────
 
 export function CellsPage({ members, cells: propCells, fellowships: propFellowships, currentUser, onRefresh }: PageProps) {
-  const [fellowships, setFellowships] = useState(propFellowships);
-  const [cells, setCells] = useState(propCells);
+  const {
+    data: cellsData,
+    refreshing: cellsRefreshing,
+    reload: load,
+  } = useStaleWhileRevalidate(
+    `cells:${currentUser.id}`,
+    async () => {
+      const [f, c] = await Promise.all([api<Fellowship[]>("/fellowships"), api<Cell[]>("/cells")]);
+      return { fellowships: f, cells: c };
+    },
+    { initialData: { fellowships: propFellowships, cells: propCells } }
+  );
+  const fellowships = cellsData?.fellowships ?? propFellowships;
+  const cells = cellsData?.cells ?? propCells;
   const [expanded, setExpanded] = useState<string | null>(null);
   const [felModal, setFelModal] = useState(false);
   const [cellModal, setCellModal] = useState(false);
@@ -1516,14 +1524,6 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
   const [cellMemberIds, setCellMemberIds] = useState<string[]>([]);
   const [memberSearch, setMemberSearch] = useState("");
   const [savingMembers, setSavingMembers] = useState(false);
-
-  const load = useCallback(() => {
-    Promise.all([api<Fellowship[]>("/fellowships"), api<Cell[]>("/cells")])
-      .then(([f, c]) => { setFellowships(f); setCells(c); })
-      .catch(() => { setFellowships(propFellowships); setCells(propCells); });
-  }, [propFellowships, propCells]);
-
-  useEffect(() => { load(); }, [load]);
 
   const createFellowship = async () => {
     if (!newFel.name) return;
@@ -1607,14 +1607,15 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
         {...pageHeaderProps("cells")}
         title="Cells & Fellowships"
         subtitle="Manage structure and leadership"
-        action={
+        action={mergePageHeaderAction(
+          cellsRefreshing,
           canManageStructure(currentUser.role) ? (
             <div className="flex gap-2">
               <Btn variant="secondary" onClick={() => setFelModal(true)}><Plus className="h-4 w-4" /> Fellowship</Btn>
               <Btn onClick={() => setCellModal(true)}><Plus className="h-4 w-4" /> Cell</Btn>
             </div>
           ) : undefined
-        }
+        )}
       />
       {fellowships.map((f) => (
         <Card key={f.id}>
@@ -1766,7 +1767,15 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
 
 export function DepartmentsPage({ members, departments: propDepts, currentUser, onRefresh }: PageProps) {
   const { refresh: refreshAuth } = useAuth();
-  const [departments, setDepartments] = useState(propDepts);
+  const {
+    data: departments = propDepts,
+    refreshing: departmentsRefreshing,
+    reload: load,
+  } = useStaleWhileRevalidate<Department[]>(
+    `departments:${currentUser.id}`,
+    () => api<Department[]>("/departments").catch(() => propDepts),
+    { initialData: propDepts }
+  );
   const [modal, setModal] = useState<"new" | null>(null);
   const [viewDept, setViewDept] = useState<Department | null>(null);
   const [deptModalTab, setDeptModalTab] = useState<"details" | "settings">("details");
@@ -1787,12 +1796,6 @@ export function DepartmentsPage({ members, departments: propDepts, currentUser, 
       abilities: f.abilities.includes(key) ? f.abilities.filter((a) => a !== key) : [...f.abilities, key],
     }));
   };
-
-  const load = useCallback(() => {
-    api<Department[]>("/departments").then(setDepartments).catch(() => setDepartments(propDepts));
-  }, [propDepts]);
-
-  useEffect(() => { load(); }, [load]);
 
   const openDepartmentDetail = (d: Department, tab: "details" | "settings" = "details") => {
     setEditId(d.id);
@@ -1875,7 +1878,8 @@ export function DepartmentsPage({ members, departments: propDepts, currentUser, 
         {...pageHeaderProps("departments")}
         title="Ministry Departments"
         subtitle="Department heads and serving members"
-        action={
+        action={mergePageHeaderAction(
+          departmentsRefreshing,
           canManage ? (
             <Btn
               onClick={() => {
@@ -1887,7 +1891,7 @@ export function DepartmentsPage({ members, departments: propDepts, currentUser, 
               <Plus className="h-4 w-4" /> New Department
             </Btn>
           ) : undefined
-        }
+        )}
       />
       {departments.length > 0 && (
         <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -2269,8 +2273,23 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
     canRecordServiceAttendanceForUser(currentUser.role, departmentAbilities);
   const [pageTab, setPageTab] = useState<"calendar" | "members" | "record">("calendar");
   const [mode, setMode] = useState<"cell" | "service">(cellScoped ? "cell" : canRecordService ? "service" : "cell");
-  const [trends, setTrends] = useState<{ date: string; cell_name: string; present_count: number }[]>([]);
-  const [records, setRecords] = useState<AttendanceRecord[]>([]);
+  const {
+    data: attendanceData,
+    refreshing: attendanceRefreshing,
+    reload: loadAttendance,
+  } = useStaleWhileRevalidate(
+    `attendance:${currentUser.id}`,
+    async () => {
+      const [records, trends] = await Promise.all([
+        api<AttendanceRecord[]>("/attendance").catch(() => [] as AttendanceRecord[]),
+        api<{ date: string; cell_name: string; present_count: number }[]>("/attendance/trends").catch(() => []),
+      ]);
+      return { records, trends };
+    },
+    { initialData: { records: [] as AttendanceRecord[], trends: [] } }
+  );
+  const records = attendanceData?.records ?? [];
+  const trends = attendanceData?.trends ?? [];
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [cellId, setCellId] = useState(currentUser.cellId || cells[0]?.id || "");
   const [present, setPresent] = useState<Set<string>>(new Set());
@@ -2280,12 +2299,6 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
   const [expandedMemberId, setExpandedMemberId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const load = () => api<typeof records>("/attendance").then(setRecords).catch(() => {});
-
-  useEffect(() => { load(); }, []);
-  useEffect(() => {
-    api<typeof trends>("/attendance/trends").then(setTrends).catch(() => {});
-  }, []);
   useEffect(() => {
     if (cellScoped) setMode("cell");
   }, [cellScoped]);
@@ -2360,7 +2373,7 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
       setNewcomers(new Set());
       setGuestNames("");
       setPageTab("calendar");
-      load();
+      loadAttendance();
       onRefresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not save attendance");
@@ -2384,13 +2397,14 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
         {...pageHeaderProps("attendance")}
         title="Attendance"
         subtitle={cellScoped ? `${myCell?.name || "Your cell"} · track meetings and turnout` : "Calendar, member history, and meeting records"}
-        action={
+        action={mergePageHeaderAction(
+          attendanceRefreshing,
           canRecord ? (
             <Btn onClick={() => setPageTab("record")}>
               <Plus className="h-4 w-4" /> Record
             </Btn>
           ) : undefined
-        }
+        )}
       />
 
       <AttendanceStatsBar records={records} />
@@ -2554,7 +2568,15 @@ export function EventsPage({ members, cells, fellowships, currentUser, onRefresh
   const { departmentAbilities } = useAuth();
   const canCreateEvents = canManageEventsForUser(currentUser.role, departmentAbilities);
   const canConfirmProgramme = canConfirmEventProgramme(currentUser.role);
-  const [events, setEvents] = useState<ChurchEvent[]>([]);
+  const {
+    data: events = [],
+    refreshing: eventsRefreshing,
+    reload: load,
+  } = useStaleWhileRevalidate<ChurchEvent[]>(
+    `events:${currentUser.id}`,
+    () => api<ChurchEvent[]>("/events").catch(() => []),
+    { initialData: [] }
+  );
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [modal, setModal] = useState(false);
   const [createStep, setCreateStep] = useState<"details" | "programme">("details");
@@ -2571,10 +2593,6 @@ export function EventsPage({ members, cells, fellowships, currentUser, onRefresh
   });
   const [programmeDraft, setProgrammeDraft] = useState<ProgrammeDraft[]>([]);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
-
-  const load = () => api<ChurchEvent[]>("/events").then(setEvents).catch(() => {});
-
-  useEffect(() => { load(); }, []);
 
   const resetCreateFlow = () => {
     setCreateStep("details");
@@ -2676,13 +2694,14 @@ export function EventsPage({ members, cells, fellowships, currentUser, onRefresh
         {...pageHeaderProps("events")}
         title="Events"
         subtitle={canCreateEvents ? "Church calendar and RSVPs" : "View church events and RSVP"}
-        action={
+        action={mergePageHeaderAction(
+          eventsRefreshing,
           canCreateEvents ? (
             <Btn onClick={openCreateModal}>
               <Plus className="h-4 w-4" /> New Event
             </Btn>
           ) : undefined
-        }
+        )}
       />
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-1">
@@ -2964,33 +2983,38 @@ export function EventsPage({ members, cells, fellowships, currentUser, onRefresh
 
 // ─── Reports ───────────────────────────────────────────────────────────────────
 
-export function ReportsPage({ departments }: PageProps) {
-  const [growth, setGrowth] = useState<{ month: string; members: number }[]>([]);
-  const [deptData, setDeptData] = useState<{ name: string; value: number }[]>([]);
-  const [trends, setTrends] = useState<{ date: string; cell_name: string; present_count: number }[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+type ReportsSnapshot = {
+  growth: { month: string; members: number }[];
+  deptData: { name: string; value: number }[];
+  trends: { date: string; cell_name: string; present_count: number }[];
+};
 
-  useEffect(() => {
-    setLoading(true);
-    setError("");
-    api<{
-      memberGrowth: { month: string; members: number }[];
-      departmentParticipation: { name: string; value: number }[];
-      attendanceTrends: { date: string; cell_name: string; present_count: number }[];
-    }>("/reports/analytics")
-      .then((analytics) => {
-        setGrowth(analytics.memberGrowth.map((g) => ({ month: g.month?.slice(5) || g.month, members: Number(g.members) })));
-        setDeptData(
-          analytics.departmentParticipation
-            .filter((d) => Number(d.value) > 0)
-            .map((d) => ({ name: d.name, value: Number(d.value) }))
-        );
-        setTrends(analytics.attendanceTrends || []);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load reports"))
-      .finally(() => setLoading(false));
-  }, []);
+export function ReportsPage({ departments, currentUser }: PageProps) {
+  const {
+    data: reportsData,
+    initialLoading: loading,
+    refreshing: reportsRefreshing,
+    error,
+  } = useStaleWhileRevalidate<ReportsSnapshot>(
+    `reports:${currentUser.id}`,
+    async () => {
+      const analytics = await api<{
+        memberGrowth: { month: string; members: number }[];
+        departmentParticipation: { name: string; value: number }[];
+        attendanceTrends: { date: string; cell_name: string; present_count: number }[];
+      }>("/reports/analytics");
+      return {
+        growth: analytics.memberGrowth.map((g) => ({ month: g.month?.slice(5) || g.month, members: Number(g.members) })),
+        deptData: analytics.departmentParticipation
+          .filter((d) => Number(d.value) > 0)
+          .map((d) => ({ name: d.name, value: Number(d.value) })),
+        trends: analytics.attendanceTrends || [],
+      };
+    }
+  );
+  const growth = reportsData?.growth ?? [];
+  const deptData = reportsData?.deptData ?? [];
+  const trends = reportsData?.trends ?? [];
 
   const trendByWeek = trends.reduce<Record<string, Record<string, number | string>>>((acc, row) => {
     const week = row.date.slice(0, 7);
@@ -3010,7 +3034,15 @@ export function ReportsPage({ departments }: PageProps) {
 
   return (
     <div className="space-y-6">
-      <PageHeader {...pageHeaderProps("reports")} title="Reports & Analytics" subtitle="Growth, attendance, and participation" action={<Btn variant="accent" onClick={handleExport}><Download className="h-4 w-4" /> Export CSV</Btn>} />
+      <PageHeader
+        {...pageHeaderProps("reports")}
+        title="Reports & Analytics"
+        subtitle="Growth, attendance, and participation"
+        action={mergePageHeaderAction(
+          reportsRefreshing,
+          <Btn variant="accent" onClick={handleExport}><Download className="h-4 w-4" /> Export CSV</Btn>
+        )}
+      />
       {error && (
         <Card className="border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
           Could not load report data: {error}. Try refreshing the page.
@@ -3132,24 +3164,47 @@ interface AdminUser {
   role: Role;
 }
 
+type SettingsSnapshot = {
+  settings: ChurchSettings;
+  users: AdminUser[];
+  audit: { action: string; member_name: string; created_at: string }[];
+};
+
 export function SettingsPage({ members, settings: propSettings, currentUser, onRefresh, userAccount }: PageProps & { userAccount?: { email: string } }) {
   const { syncBranding } = useAuth();
-  const [settings, setSettings] = useState(propSettings);
-  const [users, setUsers] = useState<AdminUser[]>([]);
   const [userForm, setUserForm] = useState({ email: "", password: "", memberId: "", accessLevel: "standard" });
   const [saving, setSaving] = useState(false);
   const [pwForm, setPwForm] = useState({ current: "", next: "", confirm: "" });
   const [pwMsg, setPwMsg] = useState("");
-  const [audit, setAudit] = useState<{ action: string; member_name: string; created_at: string }[]>([]);
   const [logoFile, setLogoFile] = useState<File | null>(null);
+  const manageSettings = canManageSettings(currentUser.role);
 
-  useEffect(() => {
-    api<ChurchSettings>("/settings").then(setSettings).catch(() => setSettings(propSettings));
-    if (canManageSettings(currentUser.role)) {
-      api<AdminUser[]>("/users").then(setUsers).catch(() => {});
-      api<typeof audit>("/audit").then(setAudit).catch(() => {});
-    }
-  }, [propSettings, currentUser.role]);
+  const {
+    data: settingsBundle,
+    refreshing: settingsRefreshing,
+    reload: reloadSettings,
+    setData: setSettingsBundle,
+  } = useStaleWhileRevalidate<SettingsSnapshot>(
+    `settings:${currentUser.id}:${manageSettings ? "admin" : "user"}`,
+    async () => {
+      const settings = await api<ChurchSettings>("/settings").catch(() => propSettings);
+      if (!manageSettings) {
+        return { settings, users: [], audit: [] };
+      }
+      const [users, audit] = await Promise.all([
+        api<AdminUser[]>("/users").catch(() => [] as AdminUser[]),
+        api<{ action: string; member_name: string; created_at: string }[]>("/audit").catch(() => []),
+      ]);
+      return { settings, users, audit };
+    },
+    { initialData: { settings: propSettings, users: [], audit: [] }, deps: [propSettings, manageSettings] }
+  );
+
+  const settings = settingsBundle?.settings ?? propSettings;
+  const users = settingsBundle?.users ?? [];
+  const audit = settingsBundle?.audit ?? [];
+  const setSettings = (next: ChurchSettings) =>
+    setSettingsBundle((prev) => (prev ? { ...prev, settings: next } : { settings: next, users: [], audit: [] }));
 
   const saveSettings = async () => {
     setSaving(true);
@@ -3175,7 +3230,7 @@ export function SettingsPage({ members, settings: propSettings, currentUser, onR
     if (!userForm.email || !userForm.password || !userForm.memberId) return;
     await api("/users", { method: "POST", body: JSON.stringify(userForm) });
     setUserForm({ email: "", password: "", memberId: "", accessLevel: "standard" });
-    api<AdminUser[]>("/users").then(setUsers);
+    reloadSettings();
   };
 
   const changePassword = async () => {
@@ -3214,7 +3269,12 @@ export function SettingsPage({ members, settings: propSettings, currentUser, onR
 
   return (
     <div className="space-y-6">
-      <PageHeader {...pageHeaderProps("settings")} title="Settings" subtitle="Church profile and admin accounts" />
+      <PageHeader
+        {...pageHeaderProps("settings")}
+        title="Settings"
+        subtitle="Church profile and admin accounts"
+        action={mergePageHeaderAction(settingsRefreshing)}
+      />
       <Card>
         <h2 className="mb-4 font-semibold">Change Password</h2>
         <p className="mb-3 text-sm text-muted-foreground">Account: {userAccount?.email}</p>
@@ -3376,19 +3436,45 @@ function isFinanceDateInRange(date: string, from: string, to: string) {
 
 type FinanceRangePreset = "month" | "lastMonth" | "year" | "all";
 
+type FinancesSnapshot = {
+  records: FinanceRecord[];
+  tithes: { memberId: string | null; memberName: string; total: number; records: FinanceRecord[] }[];
+  contexts: {
+    services: { id: string; date: string; label: string }[];
+    events: { id: string; title: string; date: string; label: string }[];
+    cells: { id: string; name: string; label: string }[];
+  };
+};
+
 export function FinancesPage({ members, currentUser }: PageProps) {
-  const [records, setRecords] = useState<FinanceRecord[]>([]);
+  const {
+    data: financesData,
+    refreshing: financesRefreshing,
+    reload: load,
+  } = useStaleWhileRevalidate<FinancesSnapshot>(
+    `finances:${currentUser.id}`,
+    async () => {
+      const [records, titheRes, contexts] = await Promise.all([
+        api<FinanceRecord[]>("/finances").catch(() => [] as FinanceRecord[]),
+        api<{ ledger: FinancesSnapshot["tithes"] }>("/finances/tithes").catch(() => ({ ledger: [] })),
+        api<FinancesSnapshot["contexts"]>("/finances/expense-contexts").catch(() => ({
+          services: [],
+          events: [],
+          cells: [],
+        })),
+      ]);
+      return { records, tithes: titheRes.ledger, contexts };
+    },
+    { initialData: { records: [], tithes: [], contexts: { services: [], events: [], cells: [] } } }
+  );
+  const records = financesData?.records ?? [];
+  const tithes = financesData?.tithes ?? [];
+  const contexts = financesData?.contexts ?? { services: [], events: [], cells: [] };
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [incomeModalOpen, setIncomeModalOpen] = useState(false);
   const [expenseModalOpen, setExpenseModalOpen] = useState(false);
   const [exportFrom, setExportFrom] = useState(financeMonthStart);
   const [exportTo, setExportTo] = useState(financeToday);
-  const [tithes, setTithes] = useState<{ memberId: string | null; memberName: string; total: number; records: FinanceRecord[] }[]>([]);
-  const [contexts, setContexts] = useState<{
-    services: { id: string; date: string; label: string }[];
-    events: { id: string; title: string; date: string; label: string }[];
-    cells: { id: string; name: string; label: string }[];
-  }>({ services: [], events: [], cells: [] });
   const [tab, setTab] = useState<"ledger" | "expenses" | "transactions">("ledger");
   const [incomeForm, setIncomeForm] = useState({
     category: "Tithe",
@@ -3406,14 +3492,6 @@ export function FinancesPage({ members, currentUser }: PageProps) {
     purposeId: "",
     purposeLabel: "",
   });
-
-  const load = () => {
-    api<FinanceRecord[]>("/finances").then(setRecords).catch(() => {});
-    api<{ ledger: typeof tithes }>("/finances/tithes").then((d) => setTithes(d.ledger)).catch(() => {});
-    api<typeof contexts>("/finances/expense-contexts").then(setContexts).catch(() => {});
-  };
-
-  useEffect(() => { load(); }, []);
 
   useEffect(() => {
     if (contexts.services.length && !expenseForm.purposeId && expenseForm.purposeType === "service") {
@@ -3576,7 +3654,8 @@ export function FinancesPage({ members, currentUser }: PageProps) {
         {...pageHeaderProps("finances")}
         title="Finances"
         subtitle="Income, expenses, and reporting"
-        action={
+        action={mergePageHeaderAction(
+          financesRefreshing,
           <div className="flex w-full flex-row flex-nowrap gap-2 sm:w-auto [&_button]:min-w-0 [&_button]:flex-1 sm:[&_button]:flex-none">
             {tab === "ledger" && (
               <Btn onClick={() => setIncomeModalOpen(true)}>
@@ -3592,7 +3671,7 @@ export function FinancesPage({ members, currentUser }: PageProps) {
               <Download className="h-4 w-4 shrink-0" /> <span className="truncate">Export</span>
             </Btn>
           </div>
-        }
+        )}
       />
 
       <TabBar
@@ -3857,7 +3936,19 @@ type PrayerFilter = "all" | "mine" | "public" | "team";
 
 export function PrayerPage({ members, currentUser }: PageProps) {
   const { departmentAbilities } = useAuth();
-  const [prayers, setPrayers] = useState<PrayerRequest[]>([]);
+  const {
+    data: prayers = [],
+    refreshing: prayersRefreshing,
+    reload: load,
+  } = useStaleWhileRevalidate<PrayerRequest[]>(
+    `prayers:${currentUser.id}`,
+    () =>
+      api<PrayerRequest[]>("/prayers").catch(() => {
+        toast.error("Could not load prayer requests");
+        return [];
+      }),
+    { initialData: [] }
+  );
   const [form, setForm] = useState({ title: "", content: "", visibility: "public" as "public" | "team" });
   const [filter, setFilter] = useState<PrayerFilter>("all");
   const [submitting, setSubmitting] = useState(false);
@@ -3865,13 +3956,6 @@ export function PrayerPage({ members, currentUser }: PageProps) {
 
   const viewPrivate = canViewPrivatePrayers(currentUser.role, departmentAbilities);
   const canRespond = canManagePrayerForUser(currentUser.role, departmentAbilities);
-
-  const load = () =>
-    api<PrayerRequest[]>("/prayers")
-      .then(setPrayers)
-      .catch(() => toast.error("Could not load prayer requests"));
-
-  useEffect(() => { load(); }, []);
 
   const filteredPrayers = useMemo(() => {
     switch (filter) {
@@ -3941,6 +4025,7 @@ export function PrayerPage({ members, currentUser }: PageProps) {
         {...pageHeaderProps("prayer")}
         title="Prayer Requests"
         subtitle="Share needs with the church or send privately to the prayer & intercession team"
+        action={mergePageHeaderAction(prayersRefreshing)}
       />
 
       <Card>
@@ -4098,7 +4183,19 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
   const canManageClass = canManageDiscipleshipForUser(currentUser.role, departmentAbilities);
   const canAssignMentor = canAssignDiscipleshipMentor(currentUser.role);
   const viewAllClass = canViewAllDiscipleshipClass(currentUser.role, departmentAbilities);
-  const [students, setStudents] = useState<ClassStudent[]>([]);
+  const {
+    data: students = [],
+    refreshing: discipleshipRefreshing,
+    reload: load,
+  } = useStaleWhileRevalidate<ClassStudent[]>(
+    `discipleship:${currentUser.id}`,
+    () =>
+      api<ClassStudent[]>("/follow-ups").catch(() => {
+        toast.error("Could not load class roster");
+        return [];
+      }),
+    { initialData: [] }
+  );
   const [enrollModal, setEnrollModal] = useState(false);
   const [sessionModal, setSessionModal] = useState<{ studentId: string; noteId?: string } | null>(null);
   const [deleteSessionTarget, setDeleteSessionTarget] = useState<{
@@ -4169,10 +4266,6 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
     for (const s of students) counts[s.stage] += 1;
     return counts;
   }, [students]);
-
-  const load = () => api<ClassStudent[]>("/follow-ups").then(setStudents).catch(() => toast.error("Could not load class roster"));
-
-  useEffect(() => { load(); }, []);
 
   const canActOnStudent = (student: ClassStudent) =>
     canManageClass || student.assignedToId === currentUser.id;
@@ -4460,7 +4553,8 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
             ? "Enroll invitees and new converts; pastors assign mentors to tutor each student"
             : "Students assigned to you for mentoring and discipleship"
         }
-        action={
+        action={mergePageHeaderAction(
+          discipleshipRefreshing,
           canManageClass ? (
             <Btn
               onClick={() => {
@@ -4471,7 +4565,7 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
               <Plus className="h-4 w-4" /> Enroll student
             </Btn>
           ) : undefined
-        }
+        )}
       />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -4703,17 +4797,21 @@ const emptyAnnouncementForm = () => ({
 
 export function AnnouncementsPage({ cells, fellowships, departments, currentUser, onRefresh }: PageProps) {
   const { departmentAbilities } = useAuth();
-  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const {
+    data: announcements = [],
+    refreshing: announcementsRefreshing,
+    reload: load,
+  } = useStaleWhileRevalidate<Announcement[]>(
+    `announcements:${currentUser.id}`,
+    () => api<Announcement[]>("/announcements").catch(() => []),
+    { initialData: [] }
+  );
   const [modal, setModal] = useState<"new" | "edit" | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Announcement | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [form, setForm] = useState(emptyAnnouncementForm);
-
-  const load = () => api<Announcement[]>("/announcements").then(setAnnouncements).catch(() => {});
-
-  useEffect(() => { load(); }, []);
 
   const targetLabel = (a: Announcement) => {
     if (a.target === "all") return "All members";
@@ -4814,7 +4912,10 @@ export function AnnouncementsPage({ cells, fellowships, departments, currentUser
         {...pageHeaderProps("announcements")}
         title="Announcements"
         subtitle="Targeted church notices"
-        action={canPost ? <Btn onClick={openNew}><Plus className="h-4 w-4" /> Post</Btn> : undefined}
+        action={mergePageHeaderAction(
+          announcementsRefreshing,
+          canPost ? <Btn onClick={openNew}><Plus className="h-4 w-4" /> Post</Btn> : undefined
+        )}
       />
       {announcements.length === 0 && (
         <p className="text-sm text-muted-foreground">No announcements yet.</p>
@@ -4927,16 +5028,20 @@ interface Task {
 
 export function TasksPage({ members, departments, currentUser }: PageProps) {
   const { departmentAbilities } = useAuth();
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const {
+    data: tasks = [],
+    refreshing: tasksRefreshing,
+    reload: load,
+  } = useStaleWhileRevalidate<Task[]>(
+    `tasks:${currentUser.id}`,
+    () => api<Task[]>("/tasks").catch(() => []),
+    { initialData: [] }
+  );
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({
     title: "", description: "", dueDate: "", priority: "medium" as Task["priority"],
     departmentId: "", assigneeIds: [] as string[],
   });
-
-  const load = () => api<Task[]>("/tasks").then(setTasks).catch(() => {});
-
-  useEffect(() => { load(); }, []);
 
   const create = async () => {
     await api("/tasks", {
@@ -4964,7 +5069,15 @@ export function TasksPage({ members, departments, currentUser }: PageProps) {
 
   return (
     <div className="space-y-6">
-      <PageHeader {...pageHeaderProps("tasks")} title="Tasks & Assignments" subtitle="Ministry tasks with notifications" action={canCreate ? <Btn onClick={() => setModal(true)}><Plus className="h-4 w-4" /> New Task</Btn> : undefined} />
+      <PageHeader
+        {...pageHeaderProps("tasks")}
+        title="Tasks & Assignments"
+        subtitle="Ministry tasks with notifications"
+        action={mergePageHeaderAction(
+          tasksRefreshing,
+          canCreate ? <Btn onClick={() => setModal(true)}><Plus className="h-4 w-4" /> New Task</Btn> : undefined
+        )}
+      />
       {tasks.map((t) => (
         <Card key={t.id}>
           <div className="flex flex-wrap justify-between gap-2">
@@ -5042,9 +5155,34 @@ interface MediaItem {
 type MediaUploadSource = "file" | "driveLink";
 
 export function MediaPage({ currentUser }: PageProps) {
-  const [media, setMedia] = useState<MediaItem[]>([]);
-  const [capabilities, setCapabilities] = useState({ canUpload: false, canApprove: false, canViewPending: false });
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const { data: capabilities = { canUpload: false, canApprove: false, canViewPending: false } } =
+    useStaleWhileRevalidate(`media-capabilities:${currentUser.id}`, () =>
+      api<{ canUpload: boolean; canApprove: boolean; canViewPending: boolean }>("/media/capabilities").catch(() => ({
+        canUpload: false,
+        canApprove: false,
+        canViewPending: false,
+      }))
+    );
+
+  const {
+    data: media = [],
+    refreshing: mediaRefreshing,
+    reload: load,
+  } = useStaleWhileRevalidate<MediaItem[]>(
+    `media:${currentUser.id}:${debouncedSearch}`,
+    () => {
+      const params = debouncedSearch ? `?search=${encodeURIComponent(debouncedSearch)}` : "";
+      return api<MediaItem[]>(`/media${params}`).catch(() => []);
+    },
+    { initialData: [], deps: [debouncedSearch] }
+  );
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadSource, setUploadSource] = useState<MediaUploadSource>("file");
   const [videoLink, setVideoLink] = useState("");
@@ -5069,22 +5207,6 @@ export function MediaPage({ currentUser }: PageProps) {
     setUploadOpen(false);
     resetUploadForm();
   };
-
-  const load = useCallback(() => {
-    const params = search ? `?search=${encodeURIComponent(search)}` : "";
-    api<MediaItem[]>(`/media${params}`).then(setMedia).catch(() => {});
-  }, [search]);
-
-  useEffect(() => {
-    api<{ canUpload: boolean; canApprove: boolean; canViewPending: boolean }>("/media/capabilities")
-      .then(setCapabilities)
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    const t = setTimeout(load, 300);
-    return () => clearTimeout(t);
-  }, [load]);
 
   const upload = async () => {
     if (!form.title.trim()) {
@@ -5258,13 +5380,14 @@ export function MediaPage({ currentUser }: PageProps) {
             ? "Sermons, notes, and teaching resources"
             : "Approved sermons and teaching resources"
         }
-        action={
+        action={mergePageHeaderAction(
+          mediaRefreshing,
           capabilities.canUpload ? (
             <Btn onClick={() => setUploadOpen(true)}>
               <Upload className="h-4 w-4" /> Upload
             </Btn>
           ) : undefined
-        }
+        )}
       />
       <div className="relative">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -5486,17 +5609,21 @@ interface CellReport {
 
 export function ReportSubmissionsPage({ members, cells, departments, currentUser, onRefresh }: PageProps) {
   const { departmentAbilities } = useAuth();
-  const [reports, setReports] = useState<CellReport[]>([]);
+  const {
+    data: reports = [],
+    refreshing: reportsRefreshing,
+    reload: load,
+  } = useStaleWhileRevalidate<CellReport[]>(
+    `report-submissions:${currentUser.id}`,
+    () => api<CellReport[]>("/reports/submissions").catch(() => []),
+    { initialData: [] }
+  );
   const [form, setForm] = useState({ attendanceCount: "", newVisitors: "", description: "", dueDate: "" });
   const [approveComment, setApproveComment] = useState<Record<string, string>>({});
   const canDeptReport = canSubmitDepartmentReport(departmentAbilities);
   const myDepartmentIds = departments
     .filter((d) => d.memberIds.includes(currentUser.id) || d.headId === currentUser.id)
     .map((d) => d.id);
-
-  const load = () => api<CellReport[]>("/reports/submissions").then(setReports).catch(() => {});
-
-  useEffect(() => { load(); }, []);
 
   const reportType =
     canDeptReport && !["Cell Leader", "Sub-cell Leader", "Fellowship Leader"].includes(currentUser.role)
@@ -5541,7 +5668,12 @@ export function ReportSubmissionsPage({ members, cells, departments, currentUser
 
   return (
     <div className="space-y-6">
-      <PageHeader {...pageHeaderProps("report-submissions")} title="Report Submissions" subtitle="Cell, fellowship, and department reports" />
+      <PageHeader
+        {...pageHeaderProps("report-submissions")}
+        title="Report Submissions"
+        subtitle="Cell, fellowship, and department reports"
+        action={mergePageHeaderAction(reportsRefreshing)}
+      />
       {canSubmit && (
         <Card>
           <h2 className="mb-4 font-semibold">Submit {reportType} report</h2>
