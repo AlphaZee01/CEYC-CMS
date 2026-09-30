@@ -3,7 +3,7 @@
 ## [2026-09-30] — PWA service worker cache errors
 
 ### Fixed
-- **Workbox** — never cache `/api/*` or `/uploads/*` (`NetworkOnly`); font runtime cache only stores HTTP 200 (not opaque `0`); larger precache size limit for main JS bundle — reduces `Cache.put() encountered a network error` in `sw.js` after deploys.
+- **Service worker** — removed Google Fonts `runtimeCaching` (common `Cache.put()` network failures); raised precache size limit; `sw-handlers.js` logs non-fatal cache errors; explicit `registerSW` in `main.tsx`.
 
 ## [2026-09-30] — Dashboard debug logs
 

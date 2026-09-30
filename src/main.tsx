@@ -3,8 +3,10 @@ import App from "./App.tsx";
 import "./index.css";
 import { getCachedBranding } from "@/lib/branding";
 import { applyWebAppBranding } from "@/lib/web-app-branding";
+import { registerAppServiceWorker } from "@/pwa-register";
 
 applyWebAppBranding(getCachedBranding());
+registerAppServiceWorker();
 
 if (import.meta.env.PROD) {
   console.info("[CEYC CMS] client build", import.meta.env.VITE_APP_BUILD_ID ?? "unknown");
