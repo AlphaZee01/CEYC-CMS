@@ -1225,7 +1225,7 @@ export function MemberProfilePage({
     initialLoading: loading,
     refreshing: profileRefreshing,
     error: loadError,
-    reload: load,
+    reload,
   } = useStaleWhileRevalidate<Member | null>(
     `member-profile:${memberId}`,
     () =>
@@ -1266,7 +1266,7 @@ export function MemberProfilePage({
         });
       }
       setEditOpen(false);
-      load();
+      reload();
       onRefresh();
       if (editingSelf) await refreshAuth();
     } catch (e) {
@@ -1501,7 +1501,7 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
   const {
     data: cellsData,
     refreshing: cellsRefreshing,
-    reload: load,
+    reload,
   } = useStaleWhileRevalidate(
     `cells:${currentUser.id}`,
     async () => {
@@ -1530,7 +1530,7 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
     await api("/fellowships", { method: "POST", body: JSON.stringify({ name: newFel.name, leaderId: newFel.leaderId || null }) });
     setFelModal(false);
     setNewFel({ name: "", leaderId: "" });
-    load();
+    reload();
     onRefresh();
   };
 
@@ -1547,7 +1547,7 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
     });
     setCellModal(false);
     setNewCell({ name: "", fellowshipId: fellowships[0]?.id || "", leaderId: "", subLeaderId: "" });
-    load();
+    reload();
     onRefresh();
   };
 
@@ -1562,7 +1562,7 @@ export function CellsPage({ members, cells: propCells, fellowships: propFellowsh
       });
     }
     setAssignModal(null);
-    load();
+    reload();
     onRefresh();
   };
 
@@ -1770,7 +1770,7 @@ export function DepartmentsPage({ members, departments: propDepts, currentUser, 
   const {
     data: departments = propDepts,
     refreshing: departmentsRefreshing,
-    reload: load,
+    reload,
   } = useStaleWhileRevalidate<Department[]>(
     `departments:${currentUser.id}`,
     () => api<Department[]>("/departments").catch(() => propDepts),
@@ -1861,7 +1861,7 @@ export function DepartmentsPage({ members, departments: propDepts, currentUser, 
       await api(`/departments/${deleteTarget.id}`, { method: "DELETE" });
       if (viewDept?.id === deleteTarget.id) closeDepartmentDetail();
       setDeleteTarget(null);
-      load();
+      reload();
       onRefresh();
       await refreshAuth();
       toast.success(`"${deleteTarget.name}" deleted`);
@@ -2276,7 +2276,7 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
   const {
     data: attendanceData,
     refreshing: attendanceRefreshing,
-    reload: loadAttendance,
+    reload,
   } = useStaleWhileRevalidate(
     `attendance:${currentUser.id}`,
     async () => {
@@ -2373,7 +2373,7 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
       setNewcomers(new Set());
       setGuestNames("");
       setPageTab("calendar");
-      loadAttendance();
+      reload();
       onRefresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not save attendance");
@@ -2470,7 +2470,7 @@ export function AttendancePage({ members, cells, fellowships, currentUser, onRef
           cells={cells}
           fellowships={fellowships}
           currentUser={currentUser}
-          onRecordUpdated={loadAttendance}
+          onRecordUpdated={reload}
         />
       )}
 
@@ -2571,7 +2571,7 @@ export function EventsPage({ members, cells, fellowships, currentUser, onRefresh
   const {
     data: events = [],
     refreshing: eventsRefreshing,
-    reload: load,
+    reload,
   } = useStaleWhileRevalidate<ChurchEvent[]>(
     `events:${currentUser.id}`,
     () => api<ChurchEvent[]>("/events").catch(() => []),
@@ -2658,7 +2658,7 @@ export function EventsPage({ members, cells, fellowships, currentUser, onRefresh
       }
       setModal(false);
       resetCreateFlow();
-      load();
+      reload();
       onRefresh();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to create event");
@@ -2669,14 +2669,14 @@ export function EventsPage({ members, cells, fellowships, currentUser, onRefresh
 
   const rsvp = async (id: string) => {
     await api(`/events/${id}/rsvp`, { method: "POST" });
-    load();
+    reload();
   };
 
   const confirmProgramme = async (eventId: string) => {
     setConfirmingId(eventId);
     try {
       await api(`/events/${eventId}/programme/confirm`, { method: "POST" });
-      load();
+      reload();
       onRefresh();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to confirm programme");
@@ -3450,7 +3450,7 @@ export function FinancesPage({ members, currentUser }: PageProps) {
   const {
     data: financesData,
     refreshing: financesRefreshing,
-    reload: load,
+    reload,
   } = useStaleWhileRevalidate<FinancesSnapshot>(
     `finances:${currentUser.id}`,
     async () => {
@@ -3608,7 +3608,7 @@ export function FinancesPage({ members, currentUser }: PageProps) {
     setIncomeForm({ category: "Tithe", amount: "", description: "", memberId: "", date: new Date().toISOString().slice(0, 10) });
     setIncomeModalOpen(false);
     toast.success("Income recorded");
-    load();
+    reload();
   };
 
   const saveExpense = async () => {
@@ -3638,7 +3638,7 @@ export function FinancesPage({ members, currentUser }: PageProps) {
     });
     setExpenseModalOpen(false);
     toast.success("Expense recorded");
-    load();
+    reload();
   };
 
   const expensesByPurpose = expenseRecords.reduce<Record<string, FinanceRecord[]>>((acc, r) => {
@@ -3939,7 +3939,7 @@ export function PrayerPage({ members, currentUser }: PageProps) {
   const {
     data: prayers = [],
     refreshing: prayersRefreshing,
-    reload: load,
+    reload,
   } = useStaleWhileRevalidate<PrayerRequest[]>(
     `prayers:${currentUser.id}`,
     () =>
@@ -3991,7 +3991,7 @@ export function PrayerPage({ members, currentUser }: PageProps) {
           : "Request shared with the church"
       );
       setForm({ title: "", content: "", visibility: "public" });
-      load();
+      reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to submit request");
     } finally {
@@ -4004,7 +4004,7 @@ export function PrayerPage({ members, currentUser }: PageProps) {
     try {
       await api(`/prayers/${id}`, { method: "PATCH", body: JSON.stringify({ status, response }) });
       toast.success(status === "answered" ? "Marked as answered" : "Marked as prayed for");
-      load();
+      reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update request");
     } finally {
@@ -4186,7 +4186,7 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
   const {
     data: students = [],
     refreshing: discipleshipRefreshing,
-    reload: load,
+    reload,
   } = useStaleWhileRevalidate<ClassStudent[]>(
     `discipleship:${currentUser.id}`,
     () =>
@@ -4314,7 +4314,7 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
       toast.success("Student enrolled in class");
       setEnrollModal(false);
       resetEnrollForm();
-      load();
+      reload();
       onRefresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to enroll student");
@@ -4377,7 +4377,7 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
         toast.success("Session logged");
       }
       closeSessionModal();
-      load();
+      reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save session");
     } finally {
@@ -4395,7 +4395,7 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
       );
       toast.success("Session deleted");
       setDeleteSessionTarget(null);
-      load();
+      reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to delete session");
     } finally {
@@ -4406,7 +4406,7 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
   const updateStage = async (id: string, stage: DiscipleshipStage) => {
     try {
       await api(`/follow-ups/${id}`, { method: "PATCH", body: JSON.stringify({ stage }) });
-      load();
+      reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update stage");
     }
@@ -4417,7 +4417,7 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
     try {
       await api(`/follow-ups/${id}`, { method: "PATCH", body: JSON.stringify({ assignedToId: mentorId }) });
       toast.success("Mentor updated");
-      load();
+      reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to assign mentor");
     }
@@ -4430,7 +4430,7 @@ export function DiscipleshipPage({ members, currentUser, onRefresh }: PageProps)
       await api(`/follow-ups/${removeTarget.id}`, { method: "DELETE" });
       toast.success(`${removeTarget.name} removed from class`);
       setRemoveTarget(null);
-      load();
+      reload();
       onRefresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to remove student");
@@ -4800,7 +4800,7 @@ export function AnnouncementsPage({ cells, fellowships, departments, currentUser
   const {
     data: announcements = [],
     refreshing: announcementsRefreshing,
-    reload: load,
+    reload,
   } = useStaleWhileRevalidate<Announcement[]>(
     `announcements:${currentUser.id}`,
     () => api<Announcement[]>("/announcements").catch(() => []),
@@ -4879,7 +4879,7 @@ export function AnnouncementsPage({ cells, fellowships, departments, currentUser
         toast.success("Announcement posted");
       }
       closeModal();
-      load();
+      reload();
       onRefresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save announcement");
@@ -4895,7 +4895,7 @@ export function AnnouncementsPage({ cells, fellowships, departments, currentUser
       await api(`/announcements/${deleteTarget.id}`, { method: "DELETE" });
       toast.success(`"${deleteTarget.title}" deleted`);
       setDeleteTarget(null);
-      load();
+      reload();
       onRefresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to delete announcement");
@@ -5031,7 +5031,7 @@ export function TasksPage({ members, departments, currentUser }: PageProps) {
   const {
     data: tasks = [],
     refreshing: tasksRefreshing,
-    reload: load,
+    reload,
   } = useStaleWhileRevalidate<Task[]>(
     `tasks:${currentUser.id}`,
     () => api<Task[]>("/tasks").catch(() => []),
@@ -5056,13 +5056,13 @@ export function TasksPage({ members, departments, currentUser }: PageProps) {
       }),
     });
     setModal(false);
-    load();
+    reload();
   };
 
   const toggleStatus = async (t: Task) => {
     const next = t.status === "completed" ? "pending" : "completed";
     await api(`/tasks/${t.id}`, { method: "PATCH", body: JSON.stringify({ status: next }) });
-    load();
+    reload();
   };
 
   const canCreate = canManageTasksForUser(currentUser.role, departmentAbilities);
@@ -5174,7 +5174,7 @@ export function MediaPage({ currentUser }: PageProps) {
   const {
     data: media = [],
     refreshing: mediaRefreshing,
-    reload: load,
+    reload,
   } = useStaleWhileRevalidate<MediaItem[]>(
     `media:${currentUser.id}:${debouncedSearch}`,
     () => {
@@ -5263,7 +5263,7 @@ export function MediaPage({ currentUser }: PageProps) {
       }
       toast.success(uploadSource === "driveLink" ? "Video link added" : "Media uploaded");
       closeUploadModal();
-      load();
+      reload();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -5273,7 +5273,7 @@ export function MediaPage({ currentUser }: PageProps) {
 
   const setMediaStatus = async (id: string, status: "approved" | "rejected") => {
     await api(`/media/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
-    load();
+    reload();
   };
 
   const isPastoral = canApproveMedia(currentUser.role);
@@ -5362,7 +5362,7 @@ export function MediaPage({ currentUser }: PageProps) {
       }
       toast.success("Media updated");
       closeEditModal();
-      load();
+      reload();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Update failed");
     } finally {
@@ -5612,7 +5612,7 @@ export function ReportSubmissionsPage({ members, cells, departments, currentUser
   const {
     data: reports = [],
     refreshing: reportsRefreshing,
-    reload: load,
+    reload,
   } = useStaleWhileRevalidate<CellReport[]>(
     `report-submissions:${currentUser.id}`,
     () => api<CellReport[]>("/reports/submissions").catch(() => []),
@@ -5648,7 +5648,7 @@ export function ReportSubmissionsPage({ members, cells, departments, currentUser
       }),
     });
     setForm({ attendanceCount: "", newVisitors: "", description: "", dueDate: "" });
-    load();
+    reload();
     onRefresh();
   };
 
@@ -5657,7 +5657,7 @@ export function ReportSubmissionsPage({ members, cells, departments, currentUser
       method: "PATCH",
       body: JSON.stringify({ status: "approved", pastorComment: approveComment[id] || "Approved. Well done." }),
     });
-    load();
+    reload();
   };
 
   const canSubmit =

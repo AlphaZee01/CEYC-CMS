@@ -4,6 +4,7 @@
 
 ### Fixed
 - **Attendance** — calendar refresh callback used removed `load` after SWR refactor (`loadAttendance`).
+- **All SWR pages** — use hook `reload` directly (no `reload: load` alias); audited callbacks/props so nothing references an undefined `load`.
 
 ## [2026-09-30] — App-wide stale-while-revalidate
 
