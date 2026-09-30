@@ -937,71 +937,58 @@ export function DashboardPage({ members, cells, fellowships, departments, curren
     };
 
     setLoading(true);
+    const showEvents =
+      currentUser.role !== "Cell Member" && currentUser.role !== "Church Member";
+    const showAnnouncements = hasAnnouncementsPage && !pastoral;
+
     (async () => {
-      try {
-        const acts = await api<typeof activities>("/activities");
-        if (!cancelled) setActivities(acts);
-      } catch {
-        /* optional feed */
-      }
+      const primaryP = pastoral
+        ? api<DashboardOverview>("/dashboard/overview")
+        : api<typeof stats>("/dashboard/stats");
+
+      const [actsResult, primaryResult, eventsResult, announcementsResult] = await Promise.all([
+        api<typeof activities>("/activities").catch(() => null),
+        primaryP.catch(() => null),
+        showEvents ? api<typeof events>("/events").catch(() => null) : Promise.resolve(null),
+        showAnnouncements
+          ? api<DashboardAnnouncementItem[]>("/announcements").catch(() => null)
+          : Promise.resolve(null),
+      ]);
+
+      if (cancelled) return;
+
+      if (actsResult) setActivities(actsResult);
 
       if (pastoral) {
-        try {
-          const ov = await api<DashboardOverview>("/dashboard/overview");
-          if (!cancelled) setOverview(ov);
-        } catch (err) {
-          if (!cancelled) {
-            toast.error(err instanceof Error ? err.message : "Could not load dashboard overview");
-            setOverview(buildFallbackOverview(currentUser.role, bootstrapCounts));
-            applyBootstrapStats();
-            try {
-              const s = await api<typeof stats>("/dashboard/stats");
-              if (!cancelled) {
-                setStats(s);
-                setOverview(
-                  buildFallbackOverview(currentUser.role, {
-                    ...bootstrapCounts,
-                    members: s.members,
-                    cells: s.cells,
-                    fellowships: s.fellowships,
-                    departments: s.departments,
-                  })
-                );
-              }
-            } catch {
-              /* bootstrap counts already applied */
-            }
+        if (primaryResult) {
+          setOverview(primaryResult);
+        } else {
+          toast.error("Could not load dashboard overview");
+          setOverview(buildFallbackOverview(currentUser.role, bootstrapCounts));
+          applyBootstrapStats();
+          const s = await api<typeof stats>("/dashboard/stats").catch(() => null);
+          if (!cancelled && s) {
+            setStats(s);
+            setOverview(
+              buildFallbackOverview(currentUser.role, {
+                ...bootstrapCounts,
+                members: s.members,
+                cells: s.cells,
+                fellowships: s.fellowships,
+                departments: s.departments,
+              })
+            );
           }
         }
+      } else if (primaryResult) {
+        setStats(primaryResult);
       } else {
-        try {
-          const s = await api<typeof stats>("/dashboard/stats");
-          if (!cancelled) setStats(s);
-        } catch (err) {
-          if (!cancelled) {
-            toast.error(err instanceof Error ? err.message : "Could not load dashboard stats");
-            applyBootstrapStats();
-          }
-        }
+        toast.error("Could not load dashboard stats");
+        applyBootstrapStats();
       }
 
-      if (currentUser.role !== "Cell Member" && currentUser.role !== "Church Member") {
-        try {
-          const ev = await api<typeof events>("/events");
-          if (!cancelled) setEvents(ev);
-        } catch {
-          /* optional */
-        }
-      }
-
-      if (hasAnnouncementsPage && !pastoral) {
-        try {
-          const ann = await api<DashboardAnnouncementItem[]>("/announcements");
-          if (!cancelled) setDashboardAnnouncements(ann.slice(0, 5));
-        } catch {
-          /* optional */
-        }
-      }
+      if (eventsResult) setEvents(eventsResult);
+      if (announcementsResult) setDashboardAnnouncements(announcementsResult.slice(0, 5));
     })().finally(() => {
       if (!cancelled) setLoading(false);
     });

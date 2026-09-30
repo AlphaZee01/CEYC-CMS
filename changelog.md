@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-09-30] — Faster bootstrap and dashboard load
+
+### Changed
+- **`GET /api/bootstrap`** — runs members, fellowships, cells, departments, settings, and all `member_departments` rows in parallel; one junction query instead of per-department lookups.
+- **Dashboard** — loads activities, overview/stats, events, and announcements in parallel (`Promise.all`); stats fallback only when pastoral overview fails.
+
 ## [2026-09-30] — `/api/auth/me` timeout after sign-in (Vercel)
 
 ### Fixed

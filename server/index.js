@@ -208,6 +208,19 @@ async function getMemberDepartmentsMap(db, memberIds) {
   return map;
 }
 
+/** One query for bootstrap: member → departments and department → members. */
+function mapsFromMemberDepartmentRows(rows) {
+  const byMember = new Map();
+  const byDepartment = new Map();
+  for (const r of rows) {
+    if (!byMember.has(r.member_id)) byMember.set(r.member_id, []);
+    byMember.get(r.member_id).push(r.department_id);
+    if (!byDepartment.has(r.department_id)) byDepartment.set(r.department_id, []);
+    byDepartment.get(r.department_id).push(r.member_id);
+  }
+  return { byMember, byDepartment };
+}
+
 async function loadMember(db, id) {
   const row = await db.prepare("SELECT * FROM members WHERE id = ?").get(id);
   return memberToJson(row, await getMemberDepartments(db, id));
@@ -280,40 +293,30 @@ app.get("/api/bootstrap", authMiddleware, async (req, res) => {
     cell_id: req.user.member.cellId,
   });
 
-  const memberRows = await db
-    .prepare(`SELECT * FROM members WHERE active = 1 AND ${scope.sql} ORDER BY name`)
-    .all(...scope.params);
-  const deptMap = await getMemberDepartmentsMap(
-    db,
-    memberRows.map((m) => m.id)
-  );
-  const members = memberRows.map((m) => memberToJson(m, deptMap.get(m.id) || []));
+  const [memberRows, fellowshipRows, cellRows, deptRows, settings, memberDeptRows] = await Promise.all([
+    db.prepare(`SELECT * FROM members WHERE active = 1 AND ${scope.sql} ORDER BY name`).all(...scope.params),
+    db.prepare("SELECT * FROM fellowships ORDER BY name").all(),
+    db.prepare("SELECT * FROM cells ORDER BY name").all(),
+    db.prepare("SELECT * FROM departments ORDER BY name").all(),
+    db.prepare("SELECT * FROM church_settings WHERE id = 1").get(),
+    db.prepare("SELECT member_id, department_id FROM member_departments").all(),
+  ]);
 
-  const fellowships = (await db.prepare("SELECT * FROM fellowships ORDER BY name").all()).map((f) => ({
+  const { byMember: deptMap, byDepartment: departmentMembersMap } = mapsFromMemberDepartmentRows(memberDeptRows);
+  const members = memberRows.map((m) => memberToJson(m, deptMap.get(m.id) || []));
+  const fellowships = fellowshipRows.map((f) => ({
     id: f.id,
     name: f.name,
     leaderId: f.leader_id,
   }));
-
-  const cells = (await db.prepare("SELECT * FROM cells ORDER BY name").all()).map((c) => ({
+  const cells = cellRows.map((c) => ({
     id: c.id,
     name: c.name,
     fellowshipId: c.fellowship_id,
     leaderId: c.leader_id,
     subLeaderId: c.sub_leader_id,
   }));
-
-  const deptRows = await db.prepare("SELECT * FROM departments ORDER BY name").all();
-  const departments = await Promise.all(
-    deptRows.map(async (d) => {
-      const memberIds = (await db
-        .prepare("SELECT member_id FROM member_departments WHERE department_id = ?")
-        .all(d.id)).map((r) => r.member_id);
-      return departmentToJson(d, memberIds);
-    })
-  );
-
-  const settings = await db.prepare("SELECT * FROM church_settings WHERE id = 1").get();
+  const departments = deptRows.map((d) => departmentToJson(d, departmentMembersMap.get(d.id) || []));
   const branding = brandingFromSettings(settings, req);
 
   res.json({
