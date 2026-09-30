@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-09-30] — PWA service worker cache errors
+
+### Fixed
+- **Workbox** — never cache `/api/*` or `/uploads/*` (`NetworkOnly`); font runtime cache only stores HTTP 200 (not opaque `0`); larger precache size limit for main JS bundle — reduces `Cache.put() encountered a network error` in `sw.js` after deploys.
+
 ## [2026-09-30] — Dashboard debug logs
 
 ### Added
