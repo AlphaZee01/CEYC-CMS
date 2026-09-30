@@ -118,7 +118,6 @@ export async function api<T>(
   let token: string | null = null;
   if (useSupabaseForAuth()) {
     token = await getSupabaseAccessToken();
-    if (token) authLog("Supabase access token ready");
   } else {
     token = getLegacyToken();
   }

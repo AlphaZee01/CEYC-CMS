@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-09-30] — Supabase sign-in timeout on slow networks
+
+### Fixed
+- **Login** — `signInWithPassword` allows **45s** (was 15s) and recovers the session if Supabase completes shortly after a timeout.
+- **Realtime** — client websocket timeout raised to 25s; reduced noisy “access token ready” logs on every API call.
+
 ## [2026-09-30] — Signup timeout on Vercel
 
 ### Fixed

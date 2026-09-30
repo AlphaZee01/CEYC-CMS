@@ -4,7 +4,10 @@ import { authLog, authLogError } from "@/lib/auth-log";
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-const AUTH_CALL_TIMEOUT_MS = 15_000;
+/** Background getSession during bootstrap */
+const SESSION_CALL_TIMEOUT_MS = 20_000;
+/** signInWithPassword on slow mobile networks (often 15–25s) */
+const SIGN_IN_TIMEOUT_MS = 45_000;
 
 /** Supabase client available (realtime chat, optional features). */
 export const supabaseConfigured = !!(url && anonKey);
@@ -20,18 +23,18 @@ export const supabase = supabaseConfigured
         autoRefreshToken: true,
         detectSessionInUrl: true,
       },
-      realtime: { params: { eventsPerSecond: 10 } },
+      realtime: { params: { eventsPerSecond: 10 }, timeout: 25_000 },
     })
   : null;
 
 let cachedAccessToken: string | null = null;
 let passwordSignInInProgress = false;
 
-function withAuthTimeout<T>(label: string, fn: () => Promise<T>): Promise<T> {
+function withAuthTimeout<T>(label: string, fn: () => Promise<T>, timeoutMs = SESSION_CALL_TIMEOUT_MS): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error(`${label} timed out — check network or Supabase config`));
-    }, AUTH_CALL_TIMEOUT_MS);
+    }, timeoutMs);
     fn()
       .then((value) => {
         clearTimeout(timer);
@@ -140,12 +143,48 @@ export async function getSupabaseAccessToken(): Promise<string | null> {
   }
 }
 
+async function waitForSessionAfterSlowSignIn(maxWaitMs = 20_000) {
+  const stepMs = 1500;
+  const attempts = Math.ceil(maxWaitMs / stepMs);
+  for (let i = 0; i < attempts; i++) {
+    await new Promise((r) => setTimeout(r, stepMs));
+    const { data } = await supabase!.auth.getSession();
+    if (data.session?.access_token) {
+      return data.session;
+    }
+  }
+  return null;
+}
+
 export async function signInWithEmail(email: string, password: string) {
   if (!supabase) throw new Error("Supabase is not configured");
   authLog("signInWithPassword", email);
-  const { data, error } = await withAuthTimeout("Sign in", () =>
-    supabase!.auth.signInWithPassword({ email, password })
-  );
+
+  let data: Awaited<ReturnType<typeof supabase.auth.signInWithPassword>>["data"];
+  let error: Awaited<ReturnType<typeof supabase.auth.signInWithPassword>>["error"];
+
+  try {
+    const result = await withAuthTimeout(
+      "Sign in",
+      () => supabase!.auth.signInWithPassword({ email, password }),
+      SIGN_IN_TIMEOUT_MS
+    );
+    data = result.data;
+    error = result.error;
+  } catch (err) {
+    const timedOut = err instanceof Error && /timed out/i.test(err.message);
+    if (timedOut) {
+      authLog("signInWithPassword", "slow response — waiting for session");
+      const late = await waitForSessionAfterSlowSignIn();
+      if (late?.access_token) {
+        cachedAccessToken = late.access_token;
+        authLog("signInWithPassword ok", "session recovered after slow sign-in");
+        return late;
+      }
+    }
+    throw err;
+  }
+
   if (error) {
     authLogError("signInWithPassword", error);
     throw new Error(error.message);
