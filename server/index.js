@@ -52,6 +52,7 @@ import { seedDatabase, ensureDashboardSamples, ensureNewcomerSampleData } from "
 import { ensureBirthdayData } from "./birthday-seed.js";
 import { canViewBirthdays, getBirthdaysForMonth } from "./birthdays.js";
 import { syncAuthUsers, createSupabaseAuthUser, updateSupabaseAuthPassword } from "./auth-sync.js";
+import { registerPublicUser } from "./public-signup.js";
 import { useSupabaseAuth } from "./supabase.js";
 import { persistUploadedFile, brandingFromSettings, normalizeLogoUrlForStorage } from "./storage.js";
 import { buildBootstrapPayload, departmentToJson } from "./bootstrap-payload.js";
@@ -260,85 +261,10 @@ app.post("/api/auth/login", async (req, res) => {
 
 app.post("/api/auth/signup", async (req, res) => {
   try {
-    if (process.env.ALLOW_PUBLIC_SIGNUP === "false") {
-      return res.status(403).json({ error: "Public signup is disabled. Contact your church office for access." });
-    }
-    const { name, email, password, phone } = req.body || {};
-    const fullName = String(name || "").trim();
-    const emailNorm = String(email || "").trim().toLowerCase();
-    const passwordText = String(password || "");
-    if (!fullName || !emailNorm || !passwordText) {
-      return res.status(400).json({ error: "Name, email, and password are required" });
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailNorm)) {
-      return res.status(400).json({ error: "Enter a valid email address" });
-    }
-    if (passwordText.length < 8) {
-      return res.status(400).json({ error: "Password must be at least 8 characters" });
-    }
-
-    const db = getDb();
-    const existingMember = await db
-      .prepare("SELECT id FROM members WHERE LOWER(email) = ? AND active = 1")
-      .get(emailNorm);
-    const existingUser = await db.prepare("SELECT id FROM users WHERE LOWER(email) = ?").get(emailNorm);
-    if (existingMember || existingUser) {
-      return res.status(409).json({ error: "An account with this email already exists. Try signing in." });
-    }
-
-    const memberId = uid();
-    const userId = uid();
-    const role = "Church Member";
-    await db.prepare(
-      `INSERT INTO members (id, name, email, phone, role, cell_id, fellowship_id, active, joined_at)
-       VALUES (?, ?, ?, ?, ?, NULL, NULL, 1, date('now'))`
-    ).run(memberId, fullName, emailNorm, String(phone || "").trim(), role);
-
-    let authUserId = null;
-    let passwordHash = null;
-    if (useSupabaseAuth()) {
-      try {
-        const auth = await createSupabaseAuthUser({
-          email: emailNorm,
-          password: passwordText,
-          memberId,
-          name: fullName,
-          role,
-        });
-        authUserId = auth.authUserId;
-        if (!authUserId) {
-          return res.status(503).json({ error: auth.warning || "Could not create login account. Try again later." });
-        }
-      } catch (authErr) {
-        await db.prepare("DELETE FROM members WHERE id = ?").run(memberId);
-        const msg = authErr instanceof Error ? authErr.message : "Signup failed";
-        return res.status(400).json({ error: msg });
-      }
-    } else {
-      const bcrypt = await import("bcryptjs");
-      passwordHash = await bcrypt.hash(passwordText, 10);
-    }
-
-    await db
-      .prepare(
-        "INSERT INTO users (id, email, password_hash, auth_user_id, member_id, access_level) VALUES (?, ?, ?, ?, ?, ?)"
-      )
-      .run(userId, emailNorm, passwordHash, authUserId, memberId, "standard");
-
-    try {
-      await logActivity(db, `New member signed up: ${fullName}`, memberId);
-    } catch {
-      /* non-fatal */
-    }
-
-    if (!useSupabaseAuth()) {
-      const login = await loginUser(emailNorm, passwordText);
-      if (login) return res.status(201).json(login);
-    }
-
-    res.status(201).json({ ok: true, email: emailNorm });
+    const result = await registerPublicUser(req.body || {});
+    res.status(result.status).json(result.body);
   } catch (err) {
-    console.error("Signup error:", err);
+    console.error("[auth/signup] error:", err);
     res.status(500).json({ error: err.message || "Signup failed" });
   }
 });

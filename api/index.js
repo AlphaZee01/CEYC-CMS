@@ -1,6 +1,7 @@
 import serverless from "serverless-http";
 import { handleLightPublic, matchLightPublicPath } from "./light-public.js";
 import { handleLightAuthMe, matchLightAuthMePath } from "./light-auth-me.js";
+import { handleLightAuthSignup, matchLightAuthSignupPath } from "./light-auth-signup.js";
 import { handleLightBootstrap, matchLightBootstrapPath } from "./light-bootstrap.js";
 
 export const config = {
@@ -29,6 +30,12 @@ export default async function vercelHandler(req, res) {
   const kind = matchLightPublicPath(req.url);
   if (kind && handleLightPublic(kind, req, res)) {
     void startBootstrap();
+    return;
+  }
+
+  if (matchLightAuthSignupPath(req)) {
+    void startBootstrap();
+    await handleLightAuthSignup(req, res);
     return;
   }
 

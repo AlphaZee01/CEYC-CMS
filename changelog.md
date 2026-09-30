@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-09-30] — Signup timeout on Vercel
+
+### Fixed
+- **`POST /api/auth/signup`** — handled by lightweight `api/light-auth-signup.js` (Postgres + Supabase user create only), avoiding 55s cold-start wait for the full Express app.
+- **Shared logic** — `server/public-signup.js` used by both Vercel light handler and Express.
+
 ## [2026-09-30] — Signup button / form UX
 
 ### Fixed
