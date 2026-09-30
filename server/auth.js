@@ -89,28 +89,45 @@ async function resolveUserFromLegacyToken(db, decoded) {
   return loadUserContext(db, user);
 }
 
-export async function authMiddleware(req, res, next) {
-  const header = req.headers.authorization;
+/** Resolve CMS user from `Authorization: Bearer …` (used by Express and Vercel light `/api/auth/me`). */
+export async function resolveUserFromAuthHeader(header) {
   if (!header?.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Authentication required" });
+    return { status: 401, error: "Authentication required" };
+  }
+
+  let db;
+  try {
+    db = getDb();
+  } catch {
+    return {
+      status: 503,
+      error: "Database unavailable. Check API server logs and .env database settings.",
+    };
   }
 
   const token = header.slice(7);
-  const db = getDb();
-
   try {
     if (useSupabaseAuth()) {
-      req.user = await resolveUserFromSupabaseToken(db, token);
-      if (!req.user) return res.status(401).json({ error: "Invalid session" });
-    } else {
-      const decoded = verifyToken(token);
-      req.user = await resolveUserFromLegacyToken(db, decoded);
-      if (!req.user) return res.status(401).json({ error: "Invalid session" });
+      const user = await resolveUserFromSupabaseToken(db, token);
+      if (!user) return { status: 401, error: "Invalid session" };
+      return { user };
     }
-    next();
+    const decoded = verifyToken(token);
+    const user = await resolveUserFromLegacyToken(db, decoded);
+    if (!user) return { status: 401, error: "Invalid session" };
+    return { user };
   } catch {
-    return res.status(401).json({ error: "Invalid or expired token" });
+    return { status: 401, error: "Invalid or expired token" };
   }
+}
+
+export async function authMiddleware(req, res, next) {
+  const result = await resolveUserFromAuthHeader(req.headers.authorization);
+  if (!result.user) {
+    return res.status(result.status || 401).json({ error: result.error });
+  }
+  req.user = result.user;
+  next();
 }
 
 export function resolvePagesForUser(user) {

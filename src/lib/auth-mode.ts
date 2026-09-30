@@ -43,19 +43,22 @@ export async function loadAuthMode(): Promise<AuthMode> {
   if (loadPromise) return loadPromise;
 
   loadPromise = (async () => {
-    const mode = await Promise.race([
-      fetchAuthModeFromServer(),
-      new Promise<AuthMode>((resolve) => {
-        setTimeout(() => {
-          const fallback = envFallbackMode();
-          authLog("loadAuthMode timeout", `using ${fallback} after ${BOOTSTRAP_MODE_TIMEOUT_MS}ms`);
-          resolve(fallback);
-        }, BOOTSTRAP_MODE_TIMEOUT_MS);
-      }),
-    ]);
-    authMode = mode;
-    loaded = true;
-    return authMode;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutFallback = new Promise<AuthMode>((resolve) => {
+      timeoutId = setTimeout(() => {
+        const fallback = envFallbackMode();
+        authLog("loadAuthMode timeout", `using ${fallback} after ${BOOTSTRAP_MODE_TIMEOUT_MS}ms`);
+        resolve(fallback);
+      }, BOOTSTRAP_MODE_TIMEOUT_MS);
+    });
+    try {
+      const mode = await Promise.race([fetchAuthModeFromServer(), timeoutFallback]);
+      authMode = mode;
+      loaded = true;
+      return authMode;
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
   })();
 
   return loadPromise;

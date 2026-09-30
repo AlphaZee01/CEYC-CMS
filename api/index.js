@@ -1,5 +1,6 @@
 import serverless from "serverless-http";
 import { handleLightPublic, matchLightPublicPath } from "./light-public.js";
+import { handleLightAuthMe, matchLightAuthMePath } from "./light-auth-me.js";
 
 export const config = {
   maxDuration: 60,
@@ -27,6 +28,12 @@ export default async function vercelHandler(req, res) {
   const kind = matchLightPublicPath(req.url);
   if (kind && handleLightPublic(kind, req, res)) {
     void startBootstrap();
+    return;
+  }
+
+  if (matchLightAuthMePath(req)) {
+    void startBootstrap();
+    await handleLightAuthMe(req, res);
     return;
   }
 

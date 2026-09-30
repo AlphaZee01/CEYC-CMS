@@ -1,5 +1,12 @@
 # Changelog
 
+## [2026-09-30] — `/api/auth/me` timeout after sign-in (Vercel)
+
+### Fixed
+- **Vercel API** — `GET /api/auth/me` is handled by `api/light-auth-me.js` without importing the full Express app, so login profile load no longer waits ~45s on cold start.
+- **Auth** — shared `resolveUserFromAuthHeader()` for Express middleware and the light handler; returns **503** when Postgres is not ready.
+- **Client** — `loadAuthMode` clears its 8s race timer when `/public/config` succeeds (no spurious timeout log).
+
 ## [2026-09-30] — Login button stuck on Loading
 
 ### Fixed

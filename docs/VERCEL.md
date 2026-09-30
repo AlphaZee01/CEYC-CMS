@@ -106,11 +106,13 @@ Then complete **Step 3** (`APP_URL` + Supabase redirect URLs + redeploy).
 | Uploads fail | Use `USE_SUPABASE_STORAGE=true` and `SUPABASE_SERVICE_ROLE_KEY`. |
 | Wrong church name on login | Set `CHURCH_NAME` or update **Settings** in the app; clear browser cache. |
 | Health `database: unavailable` | DB password/ref/region wrong, or cold start still bootstrapping — retry `/api/health`. |
+| Sign-in OK but “Server profile load timed out” | Usually cold start loading the full API; deploy latest `main` (uses fast `api/light-auth-me.js` for `GET /api/auth/me`). |
 
 ---
 
 ## Notes
 
+- **Cold start** — `/api/public/config`, health, and **`GET /api/auth/me`** use lightweight handlers so login is not blocked by importing the full Express app.
 - **Background jobs** (overdue report emails) do not run on Vercel. Use [Vercel Cron](https://vercel.com/docs/cron-jobs) later if needed.
 - **Function timeout:** 60s on the API (`vercel.json`).
 - **Local dev** unchanged: `npm run dev` (Vite :8080 + API :3001).
